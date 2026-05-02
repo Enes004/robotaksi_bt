@@ -1,0 +1,80 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "start",
+        "description": "Araç başlangıç konumu",
+        "nokta_id": 0
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          29.509014,
+          40.790343
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "gorev_1",
+        "description": "1. görev noktası",
+        "nokta_id": 0
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          29.50861,
+          40.789785
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "gorev_2",
+        "description": "2. görev noktası",
+        "nokta_id": 0
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          29.508726,
+          40.789949
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "gorev_3",
+        "description": "3. görev noktası",
+        "nokta_id": 0
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          29.509082,
+          40.789635
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "park_giris",
+        "description": "Araç otopark giriş bölgesi noktası",
+        "nokta_id": 0
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          29.509223,
+          40.790149
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,404 @@
+<?xml version="1.0"?>
+<root main_tree_to_execute="BehaviorTree">
+    <!-- ////////// -->
+    <BehaviorTree ID="BehaviorTree">
+        <ReactiveFallback>
+
+            <!-- ====== PRIORITY 1: Dynamic Obstacle ====== -->
+            <Sequence>
+                <Condition ID="DynamicObstacleCondition" sensor_data="{detected_obstacle}"/>
+                <Action ID="Wait" server_name="" server_timeout="" wait_duration="0.5"/>
+            </Sequence>
+
+            <!-- ====== PRIORITY 2: Traffic Light ====== -->
+            <Sequence>
+                <Condition ID="TrafficLightCondition" detected_sign="{detected_light}"/>
+                <Action ID="Wait" server_name="" server_timeout="" wait_duration="0.5"/>
+            </Sequence>
+
+            <!-- ====== PRIORITY 3: Sign / Tabela Reactions ====== -->
+            <Fallback>
+
+                <!-- DUR tabelası: dur, belirli süre bekle, devam et -->
+                <Sequence>
+                    <Condition ID="StopSignCondition" detected_sign="{detected_sign}"/>
+                    <Action ID="StopSignAction"/>
+                </Sequence>
+
+                <!-- Park Yeri (P-3a): JSON park noktasına git, park et -->
+                <Sequence>
+                    <Condition ID="ParkSignCondition" detected_sign="{detected_sign}"/>
+                    <Action ID="ParkingAction"/>
+                </Sequence>
+
+                <!-- Yaya Geçidi (B-14a): Yavaşla, yaya varsa DynamicObstacle zaten durdurur -->
+                <Sequence>
+                    <Condition ID="PedestrianCrossingCondition" detected_sign="{detected_sign}"/>
+                    <Action ID="SlowDownAction"/>
+                </Sequence>
+
+                <!-- Girişi Olmayan Yol (TT-4): O yolu path'ten çıkar, yeniden planla -->
+                <Sequence>
+                    <Condition ID="NoEntryCondition" detected_sign="{detected_sign}"/>
+                    <Action ID="NoEntryAction" current_vertex="{current_vertex}" next_vertex="{next_vertex}"/>
+                </Sequence>
+
+                <!-- Dönüş Yasağı (TT-26a/b): Planlanan dönüşü iptal et, vertex atla -->
+                <Sequence>
+                    <Condition ID="ForbiddenTurnCondition" detected_sign="{detected_sign}"/>
+                    <Action ID="ForbiddenTurnAction" current_vertex="{current_vertex}" next_vertex="{next_vertex}"/>
+                </Sequence>
+
+                <!-- Zorunlu Sağa Dön (TT-35a) -->
+                <Sequence>
+                    <Condition ID="MandatoryRightTurnCondition" detected_sign="{detected_sign}"/>
+                    <Action ID="MandatoryRightTurnAction" current_vertex="{current_vertex}" next_vertex="{next_vertex}"/>
+                </Sequence>
+
+                <!-- Zorunlu Sola Dön (TT-35b) -->
+                <Sequence>
+                    <Condition ID="MandatoryLeftTurnCondition" detected_sign="{detected_sign}"/>
+                    <Action ID="MandatoryLeftTurnAction" current_vertex="{current_vertex}" next_vertex="{next_vertex}"/>
+                </Sequence>
+
+                <!-- Zorunlu İleri (TT-35c) -->
+                <Sequence>
+                    <Condition ID="MandatoryForwardCondition" detected_sign="{detected_sign}"/>
+                    <Action ID="MandatoryForwardAction" current_vertex="{current_vertex}" next_vertex="{next_vertex}"/>
+                </Sequence>
+
+            </Fallback>
+
+            <!-- ====== PRIORITY 4: Normal Navigation — JSON waypoint listesi ====== -->
+            <!--
+                NavigateThroughPoses: start -> gorev_1 -> gorev_2 -> ... -> park_giris
+                Waypoint listesi GEOJSON'dan parse edilip {goals} blackboard'a yazılır.
+            -->
+            <Action ID="NavigateThroughPoses" behavior_tree="" goals="{goals}"/>
+
+        </ReactiveFallback>
+    </BehaviorTree>
+    <!-- ////////// -->
+
+    <TreeNodesModel>
+        <!-- ===== STANDARD NAV2 NODES ===== -->
+        <Action ID="AssistedTeleop">
+            <input_port name="is_recovery">If true recovery count will be incremented</input_port>
+            <input_port name="server_name">Service name</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="time_allowance">Allowed time for spinning</input_port>
+        </Action>
+        <Action ID="BackUp">
+            <input_port name="backup_dist">Distance to backup</input_port>
+            <input_port name="backup_speed">Speed at which to backup</input_port>
+            <input_port name="server_name">Server name</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="time_allowance">Allowed time for reversing</input_port>
+        </Action>
+        <Action ID="CancelAssistedTeleop">
+            <input_port name="server_name">Server name to cancel the assisted teleop behavior</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+        </Action>
+        <Action ID="CancelBackUp">
+            <input_port name="server_name">Server name to cancel the backup behavior</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+        </Action>
+        <Action ID="CancelControl">
+            <input_port name="server_name">Server name to cancel the controller server</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+        </Action>
+        <Action ID="CancelDriveOnHeading">
+            <input_port name="server_name">Service name to cancel the drive on heading behavior</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+        </Action>
+        <Action ID="CancelSpin">
+            <input_port name="server_name">Server name to cancel the spin behavior</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+        </Action>
+        <Action ID="CancelWait">
+            <input_port name="server_name">Server name to cancel the wait behavior</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+        </Action>
+        <Action ID="ClearCostmapAroundRobot">
+            <input_port name="reset_distance">Distance from the robot under which obstacles are cleared</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="service_name">Service name</input_port>
+        </Action>
+        <Action ID="ClearCostmapExceptRegion">
+            <input_port name="reset_distance">Distance from the robot above which obstacles are cleared</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="service_name">Service name</input_port>
+        </Action>
+        <Action ID="ClearEntireCostmap">
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="service_name">Service name</input_port>
+        </Action>
+        <Action ID="ComputeGoalToTopology">
+            <input_port name="end_vertex_id">end_vertex_id</input_port>
+            <input_port name="input_goals">input_goals</input_port>
+            <input_port name="output_goals">output_goals</input_port>
+            <input_port name="start_vertex_id">start_vertex_id</input_port>
+        </Action>
+        <Action ID="ComputePathThroughPoses">
+            <input_port name="goals">Destinations to plan through</input_port>
+            <output_port name="path">Path created by ComputePathToPose node</output_port>
+            <input_port name="planner_id">Mapped name to the planner plugin type to use</input_port>
+            <input_port name="server_name">Server name</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="start">Start pose of the path if overriding current robot pose</input_port>
+        </Action>
+        <Action ID="ComputePathToPose">
+            <input_port name="goal">Destination to plan to</input_port>
+            <output_port name="path">Path created by ComputePathToPose node</output_port>
+            <input_port name="planner_id">Mapped name to the planner plugin type to use</input_port>
+            <input_port name="server_name">Server name</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="start">Start pose of the path if overriding current robot pose</input_port>
+        </Action>
+        <Action ID="ControllerSelector">
+            <input_port name="default_controller">Default controller of the controller selector</input_port>
+            <output_port name="selected_controller">Name of the selected controller received from the topic subcription</output_port>
+            <input_port name="topic_name">Name of the topic to receive controller selection commands</input_port>
+        </Action>
+        <Decorator ID="DistanceController">
+            <input_port name="distance">Distance</input_port>
+            <input_port name="global_frame">Reference frame</input_port>
+            <input_port name="robot_base_frame">Robot base frame</input_port>
+        </Decorator>
+        <Condition ID="DistanceTraveled">
+            <input_port name="distance">Distance to check if passed</input_port>
+            <input_port name="global_frame">reference frame to check in</input_port>
+            <input_port name="robot_base_frame">Robot frame to check relative to global_frame</input_port>
+        </Condition>
+        <Action ID="DriveOnHeading">
+            <input_port name="dist_to_travel">Distance to travel</input_port>
+            <input_port name="server_name">Server name</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="speed">Speed at which to travel</input_port>
+            <input_port name="time_allowance">Allowed time for reversing</input_port>
+        </Action>
+        <Action ID="FollowPath">
+            <input_port default="FollowPath" name="controller_id"/>
+            <input_port name="goal_checker_id">Goal checker</input_port>
+            <input_port name="path">Path to follow</input_port>
+            <input_port name="server_name">Server name</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+        </Action>
+        <Condition ID="GlobalUpdatedGoal"/>
+        <Action ID="GoalCheckerSelector">
+            <input_port name="default_goal_checker">Default goal checker of the controller selector</input_port>
+            <output_port name="selected_goal_checker">Name of the selected goal checker received from the topic subcription</output_port>
+            <input_port name="topic_name">Name of the topic to receive goal checker selection commands</input_port>
+        </Action>
+        <Condition ID="GoalReached">
+            <input_port name="global_frame">Reference frame</input_port>
+            <input_port name="goal">Destination</input_port>
+            <input_port name="robot_base_frame">Robot base frame</input_port>
+        </Condition>
+        <Condition ID="GoalUpdated"/>
+        <Decorator ID="GoalUpdatedController"/>
+        <Decorator ID="GoalUpdater">
+            <input_port name="input_goal">Original goal in</input_port>
+            <output_port name="output_goal">Output goal set by subscription</output_port>
+        </Decorator>
+        <Condition ID="InitialPoseReceived"/>
+        <Condition ID="IsBatteryCharging">
+            <input_port name="battery_topic">Topic for battery info</input_port>
+        </Condition>
+        <Condition ID="IsBatteryLow">
+            <input_port name="battery_topic">Topic for battery info</input_port>
+            <input_port name="is_voltage">Bool if check based on voltage or total %</input_port>
+            <input_port name="min_battery">Min battery % or voltage before triggering</input_port>
+        </Condition>
+        <Condition ID="IsPathValid">
+            <input_port name="path"> Path to validate </input_port>
+            <input_port name="server_timeout"> Server timeout </input_port>
+        </Condition>
+        <Condition ID="IsStuck"/>
+        <Action ID="NavigateThroughPoses">
+            <input_port name="behavior_tree">Behavior tree to run</input_port>
+            <input_port name="goals">Ordered list of waypoints from GEOJSON (start, gorev_1..N, park_giris)</input_port>
+        </Action>
+        <Action ID="NavigateToPose">
+            <input_port name="behavior_tree">Behavior tree to run</input_port>
+            <input_port name="goal">Goal</input_port>
+        </Action>
+        <Condition ID="PathExpiringTimer">
+            <input_port name="path">Check if path has been updated to enable timer reset</input_port>
+            <input_port name="seconds">Time to check if expired</input_port>
+        </Condition>
+        <Decorator ID="PathLongerOnApproach">
+            <input_port name="length_factor">Length multiplication factor to check if the path is significantly longer </input_port>
+            <input_port name="path">Planned Path</input_port>
+            <input_port name="prox_len">Proximity length (m) for the path to be longer on approach</input_port>
+        </Decorator>
+        <Control ID="PipelineSequence"/>
+        <Action ID="PlannerSelector">
+            <input_port name="default_planner">Default planner of the planner selector</input_port>
+            <output_port name="selected_planner">Name of the selected planner received from the topic subcription</output_port>
+            <input_port name="topic_name">Name of the topic to receive planner selection commands</input_port>
+        </Action>
+        <Action ID="ProgressCheckerSelector">
+            <input_port name="default_progress_checker">Default progress checker of the controller selector</input_port>
+            <output_port name="selected_progress_checker">Name of the selected progress checker received from the topic subcription</output_port>
+            <input_port name="topic_name">Name of the topic to receive progress checker selection commands</input_port>
+        </Action>
+        <Decorator ID="RateController">
+            <input_port name="hz">Rate</input_port>
+        </Decorator>
+        <Control ID="RecoveryNode">
+            <input_port name="number_of_retries">Number of retries</input_port>
+        </Control>
+        <Action ID="ReinitializeGlobalLocalization">
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="service_name">Service name</input_port>
+        </Action>
+        <Action ID="RemovePassedGoals">
+            <input_port name="global_frame">Global frame</input_port>
+            <input_port name="input_goals">Input goals to remove if passed</input_port>
+            <output_port name="output_goals">Set of goals after removing any passed</output_port>
+            <input_port name="radius">Radius tolerance on a goal to consider it passed</input_port>
+            <input_port name="robot_base_frame">Robot base frame</input_port>
+        </Action>
+        <Control ID="RoundRobin"/>
+        <Decorator ID="SingleTrigger"/>
+        <Action ID="SmoothPath">
+            <input_port name="check_for_collisions">Bool if collision check should be performed</input_port>
+            <input_port name="max_smoothing_duration">Maximum smoothing duration</input_port>
+            <output_port name="smoothed_path">Smoothed path</output_port>
+            <input_port default="SmoothPath" name="smoother_id"/>
+            <output_port name="smoothing_duration">Smoothing duration</output_port>
+            <input_port name="unsmoothed_path">Path to be smoothed</input_port>
+            <output_port name="was_completed">True if smoothing was not interrupted by time limit</output_port>
+        </Action>
+        <Action ID="SmootherSelector">
+            <input_port name="default_smoother">Default smoother of the smoother selector</input_port>
+            <output_port name="selected_smoother">Name of the selected smoother received from the topic subcription</output_port>
+            <input_port name="topic_name">Name of the topic to receive smoother selection commands</input_port>
+        </Action>
+        <Decorator ID="SpeedController">
+            <input_port name="max_rate">Maximum rate</input_port>
+            <input_port name="max_speed">Maximum speed</input_port>
+            <input_port name="min_rate">Minimum rate</input_port>
+            <input_port name="min_speed">Minimum speed</input_port>
+        </Decorator>
+        <Action ID="Spin">
+            <input_port name="server_name">Server name</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="spin_dist">Spin distance</input_port>
+            <input_port name="time_allowance">Allowed time for spinning</input_port>
+        </Action>
+        <Condition ID="TimeExpired">
+            <input_port name="seconds">Time to check if expired</input_port>
+        </Condition>
+        <Condition ID="TransformAvailable">
+            <input_port name="child">Child frame for transform</input_port>
+            <input_port name="parent">Parent frame for transform</input_port>
+        </Condition>
+        <Action ID="TruncatePath">
+            <input_port name="distance">Distance before goal to truncate</input_port>
+            <input_port name="input_path">Path to truncate</input_port>
+            <output_port name="output_path">Truncated path to utilize</output_port>
+        </Action>
+        <Action ID="TruncatePathLocal">
+            <input_port name="angular_distance_weight">Weight of angular distance relative to positional distance when finding which path pose is closest to robot.</input_port>
+            <input_port name="distance_backward">Distance in backward direction</input_port>
+            <input_port name="distance_forward">Distance in forward direction</input_port>
+            <input_port name="max_robot_pose_search_dist">Maximum forward integrated distance along the path to bound the search for the closest pose to the robot.</input_port>
+            <output_port name="output_path">Truncated path to utilize</output_port>
+            <input_port name="pose">Manually specified pose to be used if overriding current robot pose</input_port>
+            <input_port name="robot_frame">Robot base frame id</input_port>
+            <input_port name="transform_tolerance">Transform lookup tolerance</input_port>
+        </Action>
+        <Action ID="Wait">
+            <input_port name="server_name">Server name</input_port>
+            <input_port name="server_timeout">Server timeout</input_port>
+            <input_port name="wait_duration">Wait time</input_port>
+        </Action>
+
+        <!-- ===== CUSTOM CONDITION NODES ===== -->
+        <Condition ID="DynamicObstacleCondition">
+            <!-- Returns SUCCESS (araç durur) if obstacle detected in path, FAILURE otherwise -->
+            <input_port name="sensor_data">Lidar or Camera Data</input_port>
+        </Condition>
+        <Condition ID="TrafficLightCondition">
+            <!-- Returns SUCCESS if RED light detected, FAILURE if GREEN or no light -->
+            <input_port name="detected_sign">Detected light state from perception module</input_port>
+        </Condition>
+        <Condition ID="StopSignCondition">
+            <!-- Returns SUCCESS if TT-2 DUR sign detected ahead -->
+            <input_port name="detected_sign">Detected sign from YOLO</input_port>
+        </Condition>
+        <Condition ID="ParkSignCondition">
+            <!-- Returns SUCCESS if P-3a Park Yeri sign detected AND near park_giris GPS point -->
+            <input_port name="detected_sign">Detected sign from YOLO</input_port>
+        </Condition>
+        <Condition ID="PedestrianCrossingCondition">
+            <!-- Returns SUCCESS if B-14a Yaya Gecidi sign detected -->
+            <input_port name="detected_sign">Detected sign from YOLO</input_port>
+        </Condition>
+        <Condition ID="NoEntryCondition">
+            <!-- Returns SUCCESS if TT-4 Girisi Olmayan Yol sign detected -->
+            <input_port name="detected_sign">Detected sign from YOLO</input_port>
+        </Condition>
+        <Condition ID="ForbiddenTurnCondition">
+            <!-- Returns SUCCESS if TT-26a (no right) or TT-26b (no left) sign detected -->
+            <input_port name="detected_sign">Detected sign from YOLO</input_port>
+        </Condition>
+        <Condition ID="MandatoryRightTurnCondition">
+            <!-- Returns SUCCESS if TT-35a Saga Mecburi Yon detected -->
+            <input_port name="detected_sign">Detected sign from YOLO</input_port>
+        </Condition>
+        <Condition ID="MandatoryLeftTurnCondition">
+            <!-- Returns SUCCESS if TT-35b Sola Mecburi Yon detected -->
+            <input_port name="detected_sign">Detected sign from YOLO</input_port>
+        </Condition>
+        <Condition ID="MandatoryForwardCondition">
+            <!-- Returns SUCCESS if TT-35c Ileri Mecburi Yon detected -->
+            <input_port name="detected_sign">Detected sign from YOLO</input_port>
+        </Condition>
+
+        <!-- ===== CUSTOM ACTION NODES ===== -->
+        <Action ID="StopSignAction">
+            <!-- Stops vehicle, waits required duration, then returns SUCCESS to resume navigation -->
+        </Action>
+        <Action ID="ParkingAction">
+            <!-- Navigates to valid parking spot within park_giris area.
+                 3-minute timer managed internally in C++.
+                 Checks for P-1 (no parking) signs and obstacles before choosing spot. -->
+        </Action>
+        <Action ID="SlowDownAction">
+            <!-- Reduces vehicle speed for pedestrian crossing zone.
+                 Returns SUCCESS immediately; speed restored by controller after zone. -->
+        </Action>
+        <Action ID="NoEntryAction">
+            <!-- TT-4: Marks current path vertex as blocked, forces replanning via next_vertex -->
+            <input_port name="current_vertex">Current topology vertex index</input_port>
+            <output_port name="next_vertex">Alternative vertex index after rerouting</output_port>
+        </Action>
+        <Action ID="ForbiddenTurnAction">
+            <!-- TT-26a/b: Cancels the planned turn direction, outputs alternative next vertex -->
+            <input_port name="current_vertex">Current topology vertex index</input_port>
+            <output_port name="next_vertex">Alternative vertex index bypassing forbidden turn</output_port>
+        </Action>
+        <Action ID="MandatoryRightTurnAction">
+            <!-- TT-35a: Updates navigation goal to enforce right turn at current vertex -->
+            <input_port name="current_vertex">Current vertex index</input_port>
+            <output_port name="next_vertex">Calculated next vertex enforcing right turn</output_port>
+        </Action>
+        <Action ID="MandatoryLeftTurnAction">
+            <!-- TT-35b: Updates navigation goal to enforce left turn at current vertex -->
+            <input_port name="current_vertex">Current vertex index</input_port>
+            <output_port name="next_vertex">Calculated next vertex enforcing left turn</output_port>
+        </Action>
+        <Action ID="MandatoryForwardAction">
+            <!-- TT-35c: Updates navigation goal to enforce going straight at current vertex -->
+            <input_port name="current_vertex">Current vertex index</input_port>
+            <output_port name="next_vertex">Calculated next vertex enforcing forward direction</output_port>
+        </Action>
+        <Action ID="MandatoryTurnAction">
+            <input_port name="direction">right, left or forward</input_port>
+        </Action>
+    </TreeNodesModel>
+    <!-- ////////// -->
+</root>

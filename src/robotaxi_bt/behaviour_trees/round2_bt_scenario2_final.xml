@@ -1,0 +1,163 @@
+<?xml version="1.0"?>
+<root main_tree_to_execute="BehaviorTree">
+    <!-- ////////// -->
+    <BehaviorTree ID="BehaviorTree">
+        <Sequence>
+            <Decorator ID="SingleTrigger">
+                <Action ID="InitMissionAction" goals="{goals}"/>
+            </Decorator>
+            <Control ID="RecoveryNode" number_of_retries="3">
+                <ReactiveFallback>
+                    <Sequence>
+                        <Condition ID="DynamicObstacleCondition" sensor_data="{detected_obstacle}"/>
+                        <Action ID="Wait" server_name="" server_timeout="" wait_duration="0.5"/>
+                    </Sequence>
+                    <Sequence>
+                        <Condition ID="TrafficLightCondition" detected_light="{detected_light}"/>
+                        <Action ID="Wait" server_name="" server_timeout="" wait_duration="0.5"/>
+                    </Sequence>
+                    <Fallback>
+                        <Sequence>
+                            <Condition ID="StopSignCondition" sign_detected="{sign_stop}"/>
+                            <Action ID="StopSignAction"/>
+                        </Sequence>
+                        <Sequence>
+                            <Condition ID="BusStopCondition" sign_detected="{sign_bus_stop}"/>
+                            <Action ID="BusStopAction"/>
+                        </Sequence>
+                        <Sequence>
+                            <Condition ID="ParkSignCondition" sign_detected="{sign_park}"/>
+                            <Action ID="ParkingAction"/>
+                        </Sequence>
+                        <Sequence>
+                            <Condition ID="PedestrianCrossingCondition" sign_detected="{sign_pedestrian}"/>
+                            <Action ID="SlowDownAction"/>
+                        </Sequence>
+                        <Sequence>
+                            <Condition ID="RoundaboutCondition" sign_detected="{sign_roundabout}"/>
+                            <Action ID="RoundaboutAction"/>
+                        </Sequence>
+                        <Sequence>
+                            <Condition ID="TunnelCondition" sign_detected="{sign_tunnel}"/>
+                            <Action ID="TunnelAction"/>
+                        </Sequence>
+                        <Sequence>
+                            <Condition ID="PassByCondition" sign_detected="{sign_pass_by}"/>
+                            <Action ID="PassByAction" direction="{sign_pass_by}"/>
+                        </Sequence>
+                        <Sequence>
+                            <Condition ID="NoEntryCondition" sign_detected="{sign_no_entry}"/>
+                            <Action ID="NoEntryAction" current_vertex="{current_vertex}" next_vertex="{next_vertex}"/>
+                        </Sequence>
+                        <Sequence>
+                            <Condition ID="ForbiddenTurnCondition" sign_detected="{sign_forbidden}"/>
+                            <Action ID="ForbiddenTurnAction" current_vertex="{current_vertex}" next_vertex="{next_vertex}"/>
+                        </Sequence>
+                        <Sequence>
+                            <Condition ID="MandatoryTurnCondition" sign_detected="{sign_mandatory}"/>
+                            <Action ID="MandatoryTurnAction" current_vertex="{current_vertex}" next_vertex="{next_vertex}" sign_data="{sign_mandatory}"/>
+                        </Sequence>
+                    </Fallback>
+                    <Action ID="NavigateThroughPoses" behavior_tree="" goals="{goals}"/>
+                </ReactiveFallback>
+                <Sequence>
+                    <Condition ID="IsStuck"/>
+                    <Action ID="BackUp" backup_dist="0.3" backup_speed="0.05" server_name="" server_timeout="" time_allowance="10"/>
+                    <Action ID="Spin" server_name="" server_timeout="" spin_dist="1.57" time_allowance="10"/>
+                </Sequence>
+            </Control>
+        </Sequence>
+    </BehaviorTree>
+    <!-- ////////// -->
+    <TreeNodesModel>
+        <Action ID="BackUp">
+            <input_port name="backup_dist">Geri çekilme mesafesi (m). Önerilen: 0.3</input_port>
+            <input_port name="backup_speed">Geri çekilme hızı (m/s). Önerilen: 0.05</input_port>
+            <input_port name="server_name">Nav2 behavior server adı</input_port>
+            <input_port name="server_timeout">Server timeout (sn)</input_port>
+            <input_port name="time_allowance">Maksimum süre (sn). Önerilen: 10</input_port>
+        </Action>
+        <Action ID="BusStopAction"/>
+        <Condition ID="BusStopCondition">
+            <input_port name="sign_detected">BB key: {sign_bus_stop}</input_port>
+        </Condition>
+        <Condition ID="DynamicObstacleCondition">
+            <input_port name="sensor_data">Lidar/kamera engel verisi. BB key: {detected_obstacle}</input_port>
+        </Condition>
+        <Action ID="ForbiddenTurnAction">
+            <input_port name="current_vertex">Mevcut vertex indeksi</input_port>
+            <output_port name="next_vertex">Yasak dönüşü atlayan vertex</output_port>
+        </Action>
+        <Condition ID="ForbiddenTurnCondition">
+            <input_port name="sign_detected">BB key: {sign_forbidden}</input_port>
+        </Condition>
+        <Action ID="InitMissionAction">
+            <output_port name="goals">Parse edilmiş waypoint listesi</output_port>
+        </Action>
+        <Condition ID="IsStuck"/>
+        <Action ID="MandatoryTurnAction">
+            <input_port name="current_vertex">Mevcut vertex</input_port>
+            <output_port name="next_vertex">Mecburi yöne göre hedef vertex</output_port>
+            <input_port name="sign_data">Tabela kodu + yön ({sign_mandatory}'dan)</input_port>
+        </Action>
+        <Condition ID="MandatoryTurnCondition">
+            <input_port name="sign_detected">BB key: {sign_mandatory} — &quot;TT-35X:yön&quot; formatı</input_port>
+        </Condition>
+        <Action ID="NavigateThroughPoses">
+            <input_port name="behavior_tree">                Alt BT dosyası. Boş = Nav2 varsayılanı.            </input_port>
+            <input_port name="goals">                Sıralı waypoint listesi.                Senaryo 2: start → park_giris                InitMissionAction tarafından GEOJSON'dan yüklenir.            </input_port>
+        </Action>
+        <Action ID="NoEntryAction">
+            <input_port name="current_vertex">Girişi kapalı vertex indeksi</input_port>
+            <output_port name="next_vertex">Yeniden planlama sonrası hedef vertex</output_port>
+        </Action>
+        <Condition ID="NoEntryCondition">
+            <input_port name="sign_detected">BB key: {sign_no_entry}</input_port>
+        </Condition>
+        <Condition ID="ParkSignCondition">
+            <input_port name="sign_detected">BB key: {sign_park}</input_port>
+        </Condition>
+        <Action ID="ParkingAction"/>
+        <Action ID="PassByAction">
+            <input_port name="direction">Geçiş yönü: &quot;right&quot; (TT-36a) veya &quot;left&quot; (TT-36b)</input_port>
+        </Action>
+        <Condition ID="PassByCondition">
+            <input_port name="sign_detected">BB key: {sign_pass_by} — &quot;right&quot; veya &quot;left&quot;</input_port>
+        </Condition>
+        <Condition ID="PedestrianCrossingCondition">
+            <input_port name="sign_detected">BB key: {sign_pedestrian}</input_port>
+        </Condition>
+        <Control ID="RecoveryNode">
+            <input_port name="number_of_retries">Maksimum recovery deneme sayısı</input_port>
+        </Control>
+        <Action ID="RoundaboutAction"/>
+        <Condition ID="RoundaboutCondition">
+            <input_port name="sign_detected">BB key: {sign_roundabout}</input_port>
+        </Condition>
+        <Decorator ID="SingleTrigger"/>
+        <Action ID="SlowDownAction"/>
+        <Action ID="Spin">
+            <input_port name="server_name">Nav2 behavior server adı</input_port>
+            <input_port name="server_timeout">Server timeout (sn)</input_port>
+            <input_port name="spin_dist">                Dönüş açısı (radyan).                1.57 ≈ 90° | 3.14 = 180°            </input_port>
+            <input_port name="time_allowance">Maksimum süre (sn). Önerilen: 10</input_port>
+        </Action>
+        <Action ID="StopSignAction"/>
+        <Condition ID="StopSignCondition">
+            <input_port name="sign_detected">BB key: {sign_stop}</input_port>
+        </Condition>
+        <Condition ID="TrafficLightCondition">
+            <input_port name="detected_light">Trafik ışığı durumu. BB key: {detected_light}</input_port>
+        </Condition>
+        <Action ID="TunnelAction"/>
+        <Condition ID="TunnelCondition">
+            <input_port name="sign_detected">BB key: {sign_tunnel}</input_port>
+        </Condition>
+        <Action ID="Wait">
+            <input_port name="server_name">Nav2 behavior server adı</input_port>
+            <input_port name="server_timeout">Server timeout (sn)</input_port>
+            <input_port name="wait_duration">Bekleme süresi (sn)</input_port>
+        </Action>
+    </TreeNodesModel>
+    <!-- ////////// -->
+</root>

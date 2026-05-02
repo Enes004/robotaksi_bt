@@ -1,0 +1,98 @@
+<?xml version="1.0"?>
+<root main_tree_to_execute="BehaviorTree">
+
+    <BehaviorTree ID="BehaviorTree">
+        <Control ID="RecoveryNode" number_of_retries="3">
+            
+            <ReactiveFallback>
+
+                <Sequence name="P1_DynamicObstacle">
+                    <Condition ID="DynamicObstacleCondition" sensor_data="{detected_obstacle}"/>
+                    <Action ID="Wait" wait_duration="0.5"/>
+                </Sequence>
+
+                <Sequence name="P2_StaticObstacle">
+                    <Condition ID="StaticObstacleCondition" is_static="{is_static_obstacle}"/>
+                    <Fallback>
+                        <Sequence>
+                            <Condition ID="TwoWayRoadCondition" is_two_way="{is_two_way_road}"/>
+                            <Action ID="Wait" wait_duration="1.0"/> 
+                        </Sequence>
+                        <Sequence>
+                            <Action ID="CalculateLaneChangeAction" current_pos="{current_pose}" temp_goal="{temp_goal}"/>
+                            <Action ID="DriveToGoal" goal="{temp_goal}"/> 
+                        </Sequence>
+                    </Fallback>
+                </Sequence>
+
+                <Sequence>
+                    <Condition ID="TrafficLightCondition" detected_light="{detected_light}"/>
+                    <Action ID="Wait" wait_duration="0.5"/>
+                </Sequence>
+
+                <Fallback name="P4_TrafficSigns">
+                    <Sequence>
+                        <Condition ID="LaneRegulationCondition" sign_detected="{sign_lane_reg}"/>
+                        <Action ID="LaneRegulationAction" direction="{sign_lane_reg}" current_pos="{current_pose}" temp_goal="{temp_goal}"/>
+                        <Action ID="DriveToGoal" goal="{temp_goal}"/>
+                    </Sequence>
+                    
+                    <Sequence>
+                        <Condition ID="StopSignCondition" sign_detected="{sign_stop}"/>
+                        <Action ID="StopSignAction"/>
+                    </Sequence>
+                    
+                    <Sequence>
+                        <Condition ID="BusStopCondition" sign_detected="{sign_bus_stop}"/>
+                        <Action ID="BusStopAction"/>
+                    </Sequence>
+                    
+                    <Sequence>
+                        <Condition ID="PedestrianCrossingCondition" sign_detected="{sign_pedestrian}"/>
+                        <Action ID="SlowDownAction"/>
+                    </Sequence>
+                    
+                    <Sequence>
+                        <Condition ID="RoundaboutCondition" sign_detected="{sign_roundabout}"/>
+                        <Action ID="RoundaboutAction"/>
+                    </Sequence>
+                    
+                    <Sequence>
+                        <Condition ID="TunnelCondition" sign_detected="{sign_tunnel}"/>
+                        <Action ID="TunnelAction"/>
+                    </Sequence>
+                    
+                    <Sequence>
+                        <Condition ID="PassByCondition" sign_detected="{sign_pass_by}"/>
+                        <Action ID="PassByAction" direction="{sign_pass_by}"/>
+                    </Sequence>
+                    
+                    <Sequence>
+                        <Condition ID="NoEntryCondition" sign_detected="{sign_no_entry}"/>
+                        <Action ID="NoEntryAction" current_vertex="{current_vertex}" next_vertex="{next_vertex}"/>
+                    </Sequence>
+                    
+                    <Sequence>
+                        <Condition ID="ForbiddenTurnCondition" sign_detected="{sign_forbidden}"/>
+                        <Action ID="ForbiddenTurnAction" current_vertex="{current_vertex}" next_vertex="{next_vertex}"/>
+                    </Sequence>
+                    
+                    <Sequence>
+                        <Condition ID="MandatoryTurnCondition" sign_detected="{sign_mandatory}"/>
+                        <Action ID="MandatoryTurnAction" sign_data="{sign_mandatory}" current_vertex="{current_vertex}" next_vertex="{next_vertex}"/>
+                    </Sequence>
+                </Fallback>
+
+                <Action ID="NavigateToPose" goal="{free_roam_goal}" behavior_tree=""/>
+
+            </ReactiveFallback>
+
+            <Sequence>
+                <Condition ID="IsStuck"/>
+                <Action ID="BackUp" backup_dist="0.3" backup_speed="0.05" time_allowance="10"/>
+                <Action ID="Spin" spin_dist="1.57" time_allowance="10"/>
+            </Sequence>
+            
+        </Control>
+    </BehaviorTree>
+</root>

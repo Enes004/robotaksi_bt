@@ -1,0 +1,659 @@
+<?xml version="1.0"?>
+<!--
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  TEKNOFEST 2026 Robotaksi — ÜÇÜNCÜ TUR Tree Nodes Model (Sözlük)       ║
+  ║  round3_bt_final.xml ile birlikte kullanılır                            ║
+  ║  Groot2 bu dosyayı okuyarak sol palette'i ve port bilgilerini oluşturur ║
+  ╠══════════════════════════════════════════════════════════════════════════╣
+  ║                                                                          ║
+  ║  TUR 3 KAPSAMI:                                                          ║
+  ║    ✅ Dinamik engel kaçınma                                              ║
+  ║    ✅ Trafik ışığı uyumu (kırmızı/yeşil)                                ║
+  ║    ✅ TT-2   DUR                                                         ║
+  ║    ✅ B-22   DURAK                                                       ║
+  ║    ✅ P-3a   Park Yeri                                                   ║
+  ║    ✅ B-14a  Yaya Geçidi                                                 ║
+  ║    ✅ TT-37  Ada Etrafında Dönünüz (stub)                                ║
+  ║    ✅ B-49a  Tünel (+200 puan, opsiyonel)                                ║
+  ║    ✅ TT-36a/b Sağdan/Soldan Geçiniz                                     ║
+  ║    ✅ TT-4   Girişi Olmayan Yol                                          ║
+  ║    ✅ TT-26a/b Dönüş Yasağı                                              ║
+  ║    ✅ TT-35a/b/c/d/e/g/h Mecburi Yön (7 varyant)                        ║
+  ║    ✅ Recovery: BackUp + Spin                                             ║
+  ║    ★ GoalReachedCondition — ROUND 3'E ÖZEL (Round 2'de YOKTU)          ║
+  ║    ★ PassengerAction      — ROUND 3'E ÖZEL (Round 2'de YOKTU)          ║
+  ║                                                                          ║
+  ╠══════════════════════════════════════════════════════════════════════════╣
+  ║  BLACKBOARD KEY SÖZLÜĞÜ                                                  ║
+  ║  (★ işaretliler Round 3'e özel — Round 2'de yoktu)                      ║
+  ╠══════════════════════════════════════════════════════════════════════════╣
+  ║                                                                          ║
+  ║  ★ {current_goal_type}                                                   ║
+  ║      Tip     : string                                                    ║
+  ║      Yazar   : InitMissionAction (başlangıç), PassengerAction (günceller)║
+  ║      Okur    : GoalReachedCondition, PassengerAction                     ║
+  ║      Değerler: "gorev"      → mevcut hedef bir yolcu noktası             ║
+  ║                "park_giris" → mevcut hedef park girişi                   ║
+  ║      Akış    : gorev_1'e gidilirken "gorev"                              ║
+  ║                gorev_1 servisi bittikten sonra hâlâ "gorev" (gorev_2)   ║
+  ║                gorev_2 servisi bittikten sonra "park_giris"              ║
+  ║                                                                          ║
+  ║  ★ {passenger_served}                                                    ║
+  ║      Tip     : string (virgülle ayrılmış liste)                          ║
+  ║      Yazar   : InitMissionAction ("" ile başlatır), PassengerAction      ║
+  ║      Okur    : GoalReachedCondition (çift servis koruması)               ║
+  ║      Değerler: ""                           → hiç servis yapılmadı       ║
+  ║                "gorev_1:done"               → gorev_1 tamamlandı        ║
+  ║                "gorev_2:done"               → gorev_2 tamamlandı        ║
+  ║                "gorev_1:done,gorev_2:done"  → her ikisi tamamlandı      ║
+  ║                                                                          ║
+  ║  {goals}                                                                 ║
+  ║      Tip     : vector<geometry_msgs/PoseStamped>                         ║
+  ║      Yazar   : InitMissionAction                                         ║
+  ║      Okur    : NavigateThroughPoses                                      ║
+  ║      Round 3 : [start, gorev_1, gorev_2, park_giris]                    ║
+  ║      Round 2 : [start, park_giris]  ← fark burada                       ║
+  ║                                                                          ║
+  ║  {detected_obstacle}                                                     ║
+  ║      Tip     : sensor_msgs/LaserScan veya custom obstacle msg            ║
+  ║      Yazar   : Lidar/kamera algı pipeline'ı                              ║
+  ║      Okur    : DynamicObstacleCondition                                  ║
+  ║                                                                          ║
+  ║  {detected_light}                                                        ║
+  ║      Tip     : string                                                    ║
+  ║      Yazar   : Kamera/trafik ışığı algı node'u                           ║
+  ║      Okur    : TrafficLightCondition                                     ║
+  ║      Değerler: "RED" | "GREEN" | ""                                      ║
+  ║                                                                          ║
+  ║  {sign_stop}       → TT-2  DUR               : bool                     ║
+  ║  {sign_bus_stop}   → B-22  DURAK             : bool                     ║
+  ║  {sign_park}       → P-3a  Park Yeri         : bool                     ║
+  ║  {sign_pedestrian} → B-14a Yaya Geçidi       : bool                     ║
+  ║  {sign_roundabout} → TT-37 Döner Kavşak      : bool                     ║
+  ║  {sign_tunnel}     → B-49a Tünel             : bool                     ║
+  ║  {sign_pass_by}    → TT-36a/b Sağdan/Soldan  : "right" | "left" | ""   ║
+  ║  {sign_no_entry}   → TT-4  Giriş Yasak       : bool                     ║
+  ║  {sign_forbidden}  → TT-26a/b Dönüş Yasağı   : "right" | "left" | ""   ║
+  ║  {sign_mandatory}  → TT-35a-h Mecburi Yön    : "TT-35X:yön" | ""       ║
+  ║      Yazar (tümü)  : YOLO algı node'u → ROS topic → blackboard          ║
+  ║                                                                          ║
+  ║  {current_vertex}                                                        ║
+  ║      Tip     : int                                                       ║
+  ║      Yazar   : Nav2 topoloji takip node'u                                ║
+  ║      Okur    : NoEntryAction, ForbiddenTurnAction, MandatoryTurnAction   ║
+  ║                                                                          ║
+  ║  {next_vertex}                                                           ║
+  ║      Tip     : int                                                       ║
+  ║      Yazar   : NoEntryAction, ForbiddenTurnAction, MandatoryTurnAction   ║
+  ║      Okur    : NavigateThroughPoses (güncellenen hedef)                  ║
+  ║                                                                          ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+-->
+<root>
+    <TreeNodesModel>
+
+        <!-- ═══════════════════════════════════════════════════════
+             STANDART NAV2 NODE'LARI
+             (Round 2 ile aynı — NavigateThroughPoses goals değişti)
+        ═══════════════════════════════════════════════════════════ -->
+
+        <Action ID="NavigateThroughPoses">
+            <!--
+              Sıralı waypoint listesini takip et.
+
+              Round 3 goals içeriği:
+                [0] start      → Başlangıç noktası
+                [1] gorev_1    → Yolcu BİNDİRME noktası
+                [2] gorev_2    → Yolcu İNDİRME noktası
+                [3] park_giris → Otopark giriş noktası
+
+              NOT: NavigateThroughPoses gorev_1 veya gorev_2'ye
+              ulaştığında orada DURMAZ — durma işlemini
+              GoalReachedCondition + PassengerAction çifti yapar.
+              NavigateThroughPoses sadece o noktaya yönelir.
+            -->
+            <input_port name="goals">
+                Round 3: [start, gorev_1, gorev_2, park_giris]
+                geometry_msgs/PoseStamped[] — BB key: {goals}
+            </input_port>
+            <input_port name="behavior_tree">
+                Alt BT dosya yolu. Boş bırakılırsa Nav2 varsayılanı.
+            </input_port>
+        </Action>
+
+        <Action ID="BackUp">
+            <!--
+              Aracı yavaşça geri çekme (recovery için).
+            -->
+            <input_port name="backup_dist">
+                Geri çekilme mesafesi (m). Önerilen: 0.3
+            </input_port>
+            <input_port name="backup_speed">
+                Geri çekilme hızı (m/s). Önerilen: 0.05
+            </input_port>
+            <input_port name="server_name">Nav2 behavior server adı</input_port>
+            <input_port name="server_timeout">Server yanıt bekleme süresi (sn)</input_port>
+            <input_port name="time_allowance">
+                Maksimum izin verilen süre (sn). Önerilen: 10
+            </input_port>
+        </Action>
+
+        <Action ID="Spin">
+            <!--
+              Yerinde dönerek yeni açı bul (recovery için).
+            -->
+            <input_port name="spin_dist">
+                Dönüş açısı (radyan).
+                1.57 rad ≈ 90° | 3.14 rad = 180°
+                Önerilen: 1.57 (yolcu noktaları arası dar köşeler için)
+            </input_port>
+            <input_port name="server_name">Nav2 behavior server adı</input_port>
+            <input_port name="server_timeout">Server yanıt bekleme süresi (sn)</input_port>
+            <input_port name="time_allowance">
+                Maksimum izin verilen süre (sn). Önerilen: 10
+            </input_port>
+        </Action>
+
+        <Action ID="Wait">
+            <!--
+              Belirli süre bekle (engel/ışık polling için).
+            -->
+            <input_port name="wait_duration">
+                Bekleme süresi (sn).
+                Engel/ışık polling: 0.5
+                DUR tabelası: 3.0 (StopSignAction C++ içinde kullanır)
+            </input_port>
+            <input_port name="server_name">Nav2 behavior server adı</input_port>
+            <input_port name="server_timeout">Server yanıt bekleme süresi (sn)</input_port>
+        </Action>
+
+        <Condition ID="IsStuck">
+            <!--
+              Araç mahsur kaldı mı?
+
+              Nav2 progress checker condition'ı.
+              Araç belirli süre yeterli mesafe katetmezse SUCCESS döner.
+              RecoveryNode bu sinyali alınca BackUp+Spin başlatır.
+
+              Eşik parametreleri:
+              nav2_params.yaml → progress_checker_plugin:
+                required_movement_radius: 0.5  (m)
+                movement_time_allowance:  10.0 (sn)
+            -->
+        </Condition>
+
+        <Decorator ID="SingleTrigger">
+            <!--
+              Çocuğu YALNIZCA BİR KEZ çalıştır, sonra hep SUCCESS dön.
+
+              Neden zorunlu:
+              ReactiveFallback ~10 Hz tick atar.
+              SingleTrigger olmadan InitMissionAction her 100ms'de
+              GEOJSON'u diskten okur → gereksiz I/O, gecikme riski.
+            -->
+        </Decorator>
+
+        <Control ID="RecoveryNode">
+            <!--
+              Normal görev FAILURE → Recovery dene → tekrar dene.
+
+              Round 3'te özellikle kritik:
+              gorev_1 → gorev_2 arası yol kapanırsa araç sıkışabilir.
+              3 deneme ile çıkış yolu aranır.
+            -->
+            <input_port name="number_of_retries">
+                Maksimum recovery deneme sayısı. Round 3 önerisi: 3
+            </input_port>
+        </Control>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CUSTOM CONDITION NODE'LARI
+             Tümü YOLO perception pipeline → ROS topic → blackboard
+             akışıyla beslenir.
+        ═══════════════════════════════════════════════════════════ -->
+
+
+
+        <Condition ID="TrafficLightCondition">
+            <!--
+              AMAÇ   : Mevcut trafik ışığı kırmızı mı?
+              SUCCESS: "RED"  → Wait(0.5) ile bekle (P2)
+              FAILURE: "GREEN" veya "" → geçiş serbest
+
+              Kaynak : Kamera trafik ışığı algı modeli
+              Yayın  : /traffic_light_status topic'i → BB {detected_light}
+
+              Şartname Sayfa 27-28 puanlaması:
+                Kırmızıda 0-5m tolerans içi durdu → +60
+                Kırmızıda 5m gerisinde durdu      → +20
+                Kırmızıyı geçti                   → -30
+                Yeşilde 5sn içinde hareket etti   → +40
+                Yeşilde 5-30sn arası hareket etti → +20
+                Yeşilde 30sn içinde hareket etmedi→ -20
+
+              Bu BT yapısı ile:
+              Kırmızıda hemen durulur           → +60 için optimal
+              Yeşile döner dönmez FAILURE verir → +40 garanti
+            -->
+            <input_port name="detected_light">
+                Işık durumu. BB key: {detected_light}
+                Değerler: "RED" | "GREEN" | ""
+            </input_port>
+        </Condition>
+
+        <Condition ID="StopSignCondition">
+            <!--
+              AMAÇ   : TT-2 DUR tabelası görüldü mü?
+              SUCCESS: Tabela görüldü → StopSignAction tetiklenir
+              FAILURE: Tabela yok → sonraki tabela Condition denenir
+
+              Kaynak : YOLO algı → /traffic_signs topic → BB {sign_stop}
+
+              Şartname: Trafik işareti ihlali → -50 puan (her ihlal)
+            -->
+            <input_port name="sign_detected">
+                TT-2 algı durumu. BB key: {sign_stop} — true | false
+            </input_port>
+        </Condition>
+
+        <Condition ID="BusStopCondition">
+            <!--
+              AMAÇ   : B-22 DURAK tabelası görüldü mü?
+              SUCCESS: Tabela görüldü → BusStopAction tetiklenir
+              FAILURE: Tabela yok
+
+              Kaynak : YOLO algı → BB {sign_bus_stop}
+
+              Round 3 notu:
+              gorev_1 veya gorev_2 bir durak noktasında da olabilir.
+              Bu durumda aynı konumda iki ayrı işlem gerçekleşir:
+                Tick N:   P3 → BusStopAction (B-22 kuralı, kısa bekleme)
+                Tick N+1: P3 FAILURE (tabela gözden kayboldu) →
+                          P4 → PassengerAction (yolcu servisi, 15sn)
+              Her iki puan da eksiksiz alınır.
+
+              Şartname Sayfa 8 (Kural İhlali):
+              "Durma İhlali: Belirlenen duraklama noktalarında
+               durmamak veya gereksiz yere uzun süre durmak."
+            -->
+            <input_port name="sign_detected">
+                B-22 algı durumu. BB key: {sign_bus_stop} — true | false
+            </input_port>
+        </Condition>
+
+        <Condition ID="ParkSignCondition">
+            <!--
+              AMAÇ   : P-3a PARK YERİ tabelası görüldü mü?
+              SUCCESS: Tabela görüldü → ParkingAction tetiklenir
+              FAILURE: Tabela yok
+
+              Kaynak : YOLO algı → BB {sign_park}
+
+              Şartname Sayfa 28:
+              Başarılı park (şerit içi)         → +80
+              Eksik park (bir tekerlek dışarı)  → +20
+              Uygun olmayan yere park           → -20
+            -->
+            <input_port name="sign_detected">
+                P-3a algı durumu. BB key: {sign_park} — true | false
+            </input_port>
+        </Condition>
+
+        <Condition ID="PedestrianCrossingCondition">
+            <!--
+              AMAÇ   : B-14a YAYA GEÇİDİ tabelası görüş alanında mı?
+              SUCCESS: Tabela görülüyor → SlowDownAction çalışır
+              FAILURE: Tabela kayboldu → SlowDownAction çalışmaz →
+                       C++ içi restore_speed() otomatik tetiklenir
+
+              Kaynak : YOLO algı → BB {sign_pedestrian}
+
+              Round 3 notu: yolcu indirme noktaları yaya geçidi
+              yakınında konumlandırılmış olabilir. Bu durumda:
+                - SlowDownAction (P3) yavaşlama yapar
+                - GoalReachedCondition (P4) durma/servis yapar
+              İki işlem ardışık tick'lerde sırayla çalışır.
+            -->
+            <input_port name="sign_detected">
+                B-14a algı durumu. BB key: {sign_pedestrian} — true | false
+            </input_port>
+        </Condition>
+
+        <Condition ID="RoundaboutCondition">
+            <!--
+              AMAÇ   : TT-37 ADA ETRAFINDA DÖNÜNÜZ görüldü mü?
+              SUCCESS: Tabela görüldü → RoundaboutAction (stub) çalışır
+              FAILURE: Tabela yok
+
+              Kaynak : YOLO algı → BB {sign_roundabout}
+
+              Şartname Sayfa 20: Resmi tabela listesinde yer alır.
+              Nav2 döner kavşağı zaten haritadan doğru geçer.
+              Bu node BT'de görünürlük ve hakem kanıtı sağlar.
+            -->
+            <input_port name="sign_detected">
+                TT-37 algı durumu. BB key: {sign_roundabout} — true | false
+            </input_port>
+        </Condition>
+
+        <Condition ID="TunnelCondition">
+            <!--
+              AMAÇ   : B-49a TÜNEL tabelası görüldü mü?
+              SUCCESS: Tabela görüldü → TunnelAction çalışır
+              FAILURE: Tabela yok
+
+              Kaynak : YOLO algı → BB {sign_tunnel}
+
+              Şartname Sayfa 30:
+              "Tünelin kullanılması yalnızca bir defa ekstra puan
+               katkısı sağlayacaktır, opsiyoneldir." → +200 puan
+            -->
+            <input_port name="sign_detected">
+                B-49a algı durumu. BB key: {sign_tunnel} — true | false
+            </input_port>
+        </Condition>
+
+        <Condition ID="PassByCondition">
+            <!--
+              AMAÇ   : TT-36a (sağdan) veya TT-36b (soldan) görüldü mü?
+              SUCCESS: Tabela görüldü, yön bilgisi var → PassByAction
+              FAILURE: "" (tabela yok)
+
+              Kaynak : YOLO algı → BB {sign_pass_by}
+              Değerler: "right" (TT-36a) | "left" (TT-36b) | ""
+            -->
+            <input_port name="sign_detected">
+                TT-36a/b algı durumu. BB key: {sign_pass_by}
+                Değerler: "right" | "left" | ""
+            </input_port>
+        </Condition>
+
+        <Condition ID="NoEntryCondition">
+            <!--
+              AMAÇ   : TT-4 GİRİŞİ OLMAYAN YOL görüldü mü?
+              SUCCESS: Tabela görüldü → NoEntryAction yolu kapatır
+              FAILURE: Tabela yok
+
+              Kaynak : YOLO algı → BB {sign_no_entry}
+
+              Round 3 notu: gorev_1→gorev_2 arası yol kapalıysa
+              bu tabela görülebilir. NoEntryAction alternatif rota bulur.
+            -->
+            <input_port name="sign_detected">
+                TT-4 algı durumu. BB key: {sign_no_entry} — true | false
+            </input_port>
+        </Condition>
+
+        <Condition ID="ForbiddenTurnCondition">
+            <!--
+              AMAÇ   : TT-26a/b DÖNÜŞ YASAĞI görüldü mü?
+              SUCCESS: Tabela görüldü, yasak yön bilgisi var
+              FAILURE: "" (tabela yok)
+
+              Kaynak : YOLO algı → BB {sign_forbidden}
+              Değerler: "right" (TT-26a sağa yasak) |
+                        "left"  (TT-26b sola yasak) | ""
+            -->
+            <input_port name="sign_detected">
+                TT-26a/b algı durumu. BB key: {sign_forbidden}
+                Değerler: "right" | "left" | ""
+            </input_port>
+        </Condition>
+
+        <Condition ID="MandatoryTurnCondition">
+            <!--
+              AMAÇ   : TT-35a/b/c/d/e/g/h MECBURİ YÖN görüldü mü?
+              SUCCESS: Tabela görüldü, yön bilgisi parse edildi
+              FAILURE: "" (tabela yok)
+
+              Kaynak : YOLO algı → BB {sign_mandatory}
+
+              Değer formatı: "TT-35X:yön"
+                "TT-35a:right"              → sağa dön
+                "TT-35b:left"               → sola dön
+                "TT-35c:forward"            → ileri git
+                "TT-35d:forward_right"      → ileri veya sağa
+                "TT-35e:forward_left"       → ileri veya sola
+                "TT-35g:from_forward_right" → ileriden sağa kıvrıl
+                "TT-35h:from_forward_left"  → ileriden sola kıvrıl
+            -->
+            <input_port name="sign_detected">
+                TT-35a-h algı durumu. BB key: {sign_mandatory}
+                Format: "TT-35X:yön" | ""
+            </input_port>
+        </Condition>
+
+        <!-- ★ ═══════════════════════════════════════════════════════
+             ROUND 3'E ÖZEL YENİ CONDITION
+        ═══════════════════════════════════════════════════════════ -->
+
+        <Condition ID="GoalReachedCondition">
+            <!--
+              ★ ROUND 3'E ÖZEL — Round 2'de YOKTU
+
+              AMAÇ: Araç bir yolcu noktasına (gorev_X) ulaştı mı?
+
+              SUCCESS koşulları — ÜÇÜ AYNI ANDA sağlanmalı:
+                1. {current_goal_type} == "gorev"
+                   (park_giris için asla SUCCESS vermez)
+                2. Araç mevcut hedef waypoint'e 1m tolerans içine girdi
+                   Şartname Sayfa 30:
+                   "Araç durduğu anda, aracın ön uç noktasının,
+                    JSON dosyasında belirtilen ilgili noktanın en fazla
+                    1 metre gerisinde veya 1 metre ilerisinde olması
+                    gerekmektedir."
+                3. Bu nokta için henüz servis yapılmadı
+                   {passenger_served} key'i mevcut noktayı
+                   içermiyorsa SUCCESS ver.
+                   Örnek: gorev_1'deysek ve "gorev_1:done" yoksa → SUCCESS
+                          gorev_1'deysek ve "gorev_1:done" varsa → FAILURE
+                          (çift servis önlemi)
+
+              FAILURE koşulları:
+                - {current_goal_type} == "park_giris"
+                - Araç henüz 1m tolerans bölgesine girmedi
+                - Bu noktada servis zaten yapıldı
+
+              C++ implementasyon notu:
+                Mevcut hedef mesafesi için nav2_msgs/action/
+                NavigateThroughPoses feedback'indeki
+                distance_remaining alanı veya TF-based hesaplama
+                kullanılabilir.
+                goals indeksini takip ederek hangi noktada
+                olduğunu belirle (goal_index).
+            -->
+            <input_port name="current_goal_type">
+                Mevcut waypoint tipi. BB key: {current_goal_type}
+                Değerler: "gorev" | "park_giris"
+                InitMissionAction başlangıçta yazar.
+                PassengerAction servis sonrası günceller.
+            </input_port>
+            <input_port name="passenger_served">
+                Tamamlanan servisler. BB key: {passenger_served}
+                Değerler: "" | "gorev_1:done" |
+                          "gorev_2:done" | "gorev_1:done,gorev_2:done"
+                Aynı noktada iki kez PassengerAction çalışmasını önler.
+            </input_port>
+        </Condition>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CUSTOM ACTION NODE'LARI
+        ═══════════════════════════════════════════════════════════ -->
+
+        
+
+        
+
+        <!-- Aşağıdaki node'lar Round 2 ile BİREBİR AYNI -->
+
+        <Action ID="StopSignAction">
+            <!--
+              TT-2 DUR:
+                1. cmd_vel = 0 → araç tam durur
+                2. ~3 saniye bekle
+                3. SUCCESS dön
+
+              Tabela hâlâ görünüyorsa Condition tekrar SUCCESS dönebilir.
+              C++ içinde "zaten_durdum" flag'i ile çift durma önlenir.
+            -->
+        </Action>
+
+        <Action ID="BusStopAction">
+            <!--
+              B-22 DURAK:
+              StopSignAction ile aynı yapı.
+              Bekleme süresi rosparam'dan ayarlanabilir.
+              Varsayılan öneri: 5 saniye.
+            -->
+        </Action>
+
+        
+
+        <Action ID="SlowDownAction">
+            <!--
+              Yaya Geçidi Hız Düşürme:
+              Nav2 controller max_vel_x parametresini geçici düşür.
+              (Önerilen: normal hızın %50'si)
+
+              PedestrianCrossingCondition FAILURE dönünce
+              bu action bir sonraki tick'te çalışmaz.
+              C++ içindeki restore_speed() tetiklenir → normal hız.
+            -->
+        </Action>
+
+        <Action ID="RoundaboutAction">
+            <!--
+              TT-37 ADA ETRAFINDA DÖNÜNÜZ — STUB:
+              Nav2 döner kavşağı haritadan doğru geçer.
+              Bu action sadece SUCCESS döner.
+
+              C++ implementasyonu:
+                BT::NodeStatus tick() override {
+                    return BT::NodeStatus::SUCCESS;
+                }
+            -->
+        </Action>
+
+        <Action ID="TunnelAction">
+            <!--
+              B-49a TÜNEL (+200 puan, tek seferlik):
+
+              C++ implementasyon adımları:
+              1. static bool tunnel_used = false; kontrolü
+                 Şartname: "yalnızca bir defa puan katkısı"
+                 Zaten kullanıldıysa direkt SUCCESS dön
+              2. Tünel girişini onayla
+              3. Nav2 max_vel düşür
+              4. Tünelden geç
+              5. Çıkışta hızı normale döndür
+              6. tunnel_used = true;
+              7. SUCCESS dön
+            -->
+        </Action>
+
+        <Action ID="PassByAction">
+            <!--
+              TT-36a/b Engel Bypass:
+
+              direction="right" (TT-36a SAĞDAN GİDİNİZ):
+                Costmap'te engelin sol tarafına lethal bölge ekle
+                → planner sağ taraftan geçen rota hesaplar
+
+              direction="left" (TT-36b SOLDAN GİDİNİZ):
+                Costmap'te engelin sağ tarafına lethal bölge ekle
+                → planner sol taraftan geçen rota hesaplar
+            -->
+            <input_port name="direction">
+                Geçiş yönü. BB key: {sign_pass_by}
+                Değerler: "right" (TT-36a) | "left" (TT-36b)
+            </input_port>
+        </Action>
+
+        <Action ID="NoEntryAction">
+            <!--
+              TT-4 Yol Kapatma:
+              1. current_vertex'e giden kenarı lethal işaretle
+              2. Nav2 global planner yeniden tetikle
+              3. next_vertex'e alternatif hedefi yaz
+              4. SUCCESS dön
+            -->
+            <input_port name="current_vertex">
+                Girişi kapalı yolun vertex indeksi. BB key: {current_vertex}
+            </input_port>
+            <output_port name="next_vertex">
+                Yeniden planlama sonrası alternatif vertex. BB key: {next_vertex}
+            </output_port>
+        </Action>
+
+        <Action ID="ForbiddenTurnAction">
+            <!--
+              TT-26a/b Yasak Dönüş:
+              1. Yasak dönüş yönünü costmap kısıtı olarak ekle
+              2. Nav2 global planner yeniden tetikle
+              3. next_vertex'e alternatif hedefi yaz
+              4. SUCCESS dön
+            -->
+            <input_port name="current_vertex">
+                Mevcut topoloji vertex indeksi. BB key: {current_vertex}
+            </input_port>
+            <output_port name="next_vertex">
+                Yasak dönüşü atlayan alternatif vertex. BB key: {next_vertex}
+            </output_port>
+        </Action>
+
+        <Action ID="MandatoryTurnAction">
+            <!--
+              TT-35a-h Mecburi Yön (7 varyant):
+
+              sign_data parse:
+                token = sign_data.split(":")
+                kod = token[0]  // "TT-35a" ... "TT-35h"
+                yon = token[1]  // "right", "forward_right", vb.
+
+              Yön → Nav2 hedefi:
+                "right"              → sağdaki vertex
+                "left"               → soldaki vertex
+                "forward"            → düz ilerleyen vertex
+                "forward_right"      → sağ ve düz arası en uygun
+                "forward_left"       → sol ve düz arası en uygun
+                "from_forward_right" → ileriden sağa kıvrılan yol
+                "from_forward_left"  → ileriden sola kıvrılan yol
+            -->
+            <input_port name="sign_data">
+                Tabela kodu + yön. BB key: {sign_mandatory}
+                Format: "TT-35X:yön"
+            </input_port>
+            <input_port name="current_vertex">
+                Mevcut topoloji vertex. BB key: {current_vertex}
+            </input_port>
+            <output_port name="next_vertex">
+                Mecburi yöne göre hedef vertex. BB key: {next_vertex}
+            </output_port>
+        </Action>
+        <Condition ID="DynamicObstacleCondition">
+            <input_port name="sensor_data">BB key: {detected_obstacle}</input_port>
+        </Condition>
+        <Condition ID="StaticObstacleCondition">
+            <input_port name="is_static">BB key: {is_static_obstacle}</input_port>
+        </Condition>
+        <Condition ID="TwoWayRoadCondition">
+            <input_port name="is_two_way">BB key: {is_two_way_road}</input_port>
+        </Condition>
+        <Condition ID="LaneRegulationCondition">
+            <input_port name="sign_detected">BB key: {sign_lane_reg}</input_port>
+        </Condition>
+
+        <Action ID="CalculateLaneChangeAction">
+            <input_port name="current_pos">BB key: {current_pose}</input_port>
+            <output_port name="temp_goal">BB key: {temp_goal}</output_port>
+        </Action>
+        <Action ID="LaneRegulationAction">
+            <input_port name="direction">BB key: {sign_lane_reg}</input_port>
+            <input_port name="current_pos">BB key: {current_pose}</input_port>
+            <output_port name="temp_goal">BB key: {temp_goal}</output_port>
+        </Action>
+        <Action ID="DriveToGoal">
+            <input_port name="goal">BB key: {temp_goal}</input_port>
+        </Action>
+    </TreeNodesModel>
+</root>

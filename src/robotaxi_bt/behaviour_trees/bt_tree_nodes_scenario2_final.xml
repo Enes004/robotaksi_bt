@@ -1,0 +1,520 @@
+<?xml version="1.0"?>
+<!--
+  TEKNOFEST 2026 Robotaksi — Tree Nodes Model
+  Senaryo 2 Final | round2_bt_scenario2_final.xml ile birlikte kullanılır
+
+  Groot2 bu dosyayı okuyarak sol palette'i oluşturur.
+
+  SENARYO 2 KAPSAMI:
+    ✅ Dinamik engel kaçınma
+    ✅ Trafik ışığı uyumu
+    ✅ TT-2  DUR
+    ✅ B-22  DURAK
+    ✅ P-3a  Park Yeri
+    ✅ B-14a Yaya Geçidi
+    ✅ TT-37 Ada Etrafında Dönünüz (stub)
+    ✅ B-49a Tünel (+200 puan)
+    ✅ TT-36a/b Sağdan/Soldan Geçiniz
+    ✅ TT-4  Girişi Olmayan Yol
+    ✅ TT-26a/b Dönüş Yasağı
+    ✅ TT-35a/b/c/d/e/g/h Mecburi Yön (7 varyant)
+    ✅ Recovery: BackUp + Spin
+    ❌ PassengerAction — Senaryo 2'de YOKTUR (yolcu indirme/bindirme yok)
+
+  BLACKBOARD KEY'LERİ:
+    {goals}              → start → park_giris  (InitMissionAction yazar)
+    {detected_obstacle}  → lidar/kamera engel verisi
+    {detected_light}     → "RED" | "GREEN" | ""
+    {sign_stop}          → TT-2:  true/false
+    {sign_bus_stop}      → B-22:  true/false
+    {sign_park}          → P-3a:  true/false
+    {sign_pedestrian}    → B-14a: true/false
+    {sign_roundabout}    → TT-37: true/false
+    {sign_tunnel}        → B-49a: true/false
+    {sign_pass_by}       → TT-36a/b: "right" | "left" | ""
+    {sign_no_entry}      → TT-4:  true/false
+    {sign_forbidden}     → TT-26a/b: "right" | "left" | ""
+    {sign_mandatory}     → TT-35x: "TT-35X:yön" | ""
+    {current_vertex}     → mevcut topoloji vertex indeksi
+    {next_vertex}        → rota değişikliği sonrası hedef vertex
+-->
+<root>
+    <TreeNodesModel>
+
+        <!-- ═══════════════════════════════════════════
+             STANDART NAV2 NODE'LARI
+        ═══════════════════════════════════════════ -->
+
+        <Action ID="NavigateThroughPoses">
+            <input_port name="goals">
+                Sıralı waypoint listesi (geometry_msgs/PoseStamped[]).
+                Senaryo 2: start → park_giris
+                (Yolcu noktası YOK)
+            </input_port>
+            <input_port name="behavior_tree">
+                Alt BT dosya yolu. Boş bırakılırsa Nav2 varsayılanı kullanılır.
+            </input_port>
+        </Action>
+
+        <Action ID="BackUp">
+            <input_port name="backup_dist">Geri çekilme mesafesi (m). Senaryo 2 önerisi: 0.3</input_port>
+            <input_port name="backup_speed">Geri çekilme hızı (m/s). Önerilen: 0.05</input_port>
+            <input_port name="server_name">Nav2 behavior server adı</input_port>
+            <input_port name="server_timeout">Server yanıt bekleme süresi (sn)</input_port>
+            <input_port name="time_allowance">Maksimum izin verilen süre (sn). Önerilen: 10</input_port>
+        </Action>
+
+        <Action ID="Spin">
+            <input_port name="spin_dist">
+                Dönüş açısı radyan cinsinden.
+                1.57 rad = 90° | 3.14 rad = 180°
+                Senaryo 2: kapalı yol köşelerinde 90° yeterli.
+            </input_port>
+            <input_port name="server_name">Nav2 behavior server adı</input_port>
+            <input_port name="server_timeout">Server yanıt bekleme süresi (sn)</input_port>
+            <input_port name="time_allowance">Maksimum izin verilen süre (sn). Önerilen: 10</input_port>
+        </Action>
+
+        <Action ID="Wait">
+            <input_port name="wait_duration">
+                Bekleme süresi (sn).
+                Trafik ışığı/engel polling için: 0.5
+                DUR tabelası için: 3.0  (StopSignAction C++ içinde kullanır)
+            </input_port>
+            <input_port name="server_name">Nav2 behavior server adı</input_port>
+            <input_port name="server_timeout">Server yanıt bekleme süresi (sn)</input_port>
+        </Action>
+
+        <Condition ID="IsStuck">
+            <!--
+              Nav2 progress checker condition'ı.
+              Araç belirli süre boyunca yeterli mesafe katetmezse SUCCESS döner.
+              Eşik değerleri nav2_params.yaml dosyasındaki
+              progress_checker plugin parametreleriyle ayarlanır.
+            -->
+        </Condition>
+
+        <Decorator ID="SingleTrigger">
+            <!--
+              Altındaki node'u YALNIZCA BİR KEZ çalıştırır.
+              İlk çalışmadan sonra her tick'te direkt SUCCESS döner.
+              InitMissionAction ile kullanılır: GEOJSON tek seferlik okunur.
+            -->
+        </Decorator>
+
+        <Control ID="RecoveryNode">
+            <input_port name="number_of_retries">
+                Maksimum recovery deneme sayısı.
+                Senaryo 2 için 3 önerilir:
+                kapalı yollarda sıkışma durumu birden fazla
+                recovery gerektirebilir.
+            </input_port>
+        </Control>
+
+        <!-- ═══════════════════════════════════════════
+             CUSTOM CONDITION NODE'LARI
+             YOLO perception → ROS topic → blackboard
+        ═══════════════════════════════════════════ -->
+
+        <Condition ID="DynamicObstacleCondition">
+            <!--
+              AMAÇ: Araç önünde anlık engel var mı?
+              DÖNÜŞ:
+                SUCCESS → Engel algılandı (araç beklemeye alınır)
+                FAILURE → Yol temiz (devam)
+              KAYNAK: {detected_obstacle} blackboard key'i
+              VERİ TİPİ: sensor_msgs/LaserScan veya custom obstacle msg
+
+              Şartname Sayfa 24 (Dinamik Engeller):
+              "Araçlar bu tip engellerden sakınabilir, engel geçinceye
+               kadar bekleyebilir, tamamen durabilir."
+              Şartname Sayfa 29:
+              Engele çarpmama → +50 | Çarptı → Turdan Diskalifiye
+            -->
+            <input_port name="sensor_data">
+                Lidar/kamera engel verisi. BB key: {detected_obstacle}
+            </input_port>
+        </Condition>
+
+        <Condition ID="TrafficLightCondition">
+            <!--
+              AMAÇ: Trafik ışığı kırmızı mı?
+              DÖNÜŞ:
+                SUCCESS → "RED"  (araç bekler)
+                FAILURE → "GREEN" veya "" (araç geçer)
+              KAYNAK: {detected_light} blackboard key'i
+
+              Şartname Sayfa 27-28 puanlaması:
+              Kırmızıda 0-5m tolerans içinde durdu → +60 puan
+              Kırmızıya geçti → -30 puan
+              Yeşilde 5sn içinde hareket etti → +40 puan
+              Yeşilde 30sn içinde hareket etmedi → -20 puan
+
+              Bu yapı ile:
+              Kırmızıda hemen durulur (+60 için optimal)
+              Yeşile döner dönmez hareket edilir (+40 garanti)
+            -->
+            <input_port name="detected_light">
+                Trafik ışığı durumu. BB key: {detected_light}
+                Değerler: "RED" | "GREEN" | ""
+            </input_port>
+        </Condition>
+
+        <Condition ID="StopSignCondition">
+            <!--
+              AMAÇ: TT-2 DUR tabelası algılandı mı?
+              DÖNÜŞ:
+                SUCCESS → Tabela görüldü → StopSignAction çalışır
+                FAILURE → Tabela yok
+              KAYNAK: {sign_stop} = true | false
+
+              Şartname Sayfa 30:
+              Trafik işareti ihlali → -50 puan
+            -->
+            <input_port name="sign_detected">BB key: {sign_stop}</input_port>
+        </Condition>
+
+        <Condition ID="BusStopCondition">
+            <!--
+              AMAÇ: B-22 DURAK tabelası algılandı mı?
+              DÖNÜŞ:
+                SUCCESS → Tabela görüldü → BusStopAction çalışır
+                FAILURE → Tabela yok
+              KAYNAK: {sign_bus_stop} = true | false
+
+              Şartname Sayfa 8 (Kural İhlali):
+              "Durma İhlali: Belirlenen duraklama noktalarında
+               durmamak veya gereksiz yere uzun süre durmak."
+              Şartname Sayfa 23: Resmi tabela listesinde yer alır.
+            -->
+            <input_port name="sign_detected">BB key: {sign_bus_stop}</input_port>
+        </Condition>
+
+        <Condition ID="ParkSignCondition">
+            <!--
+              AMAÇ: P-3a PARK YERİ tabelası algılandı mı?
+              DÖNÜŞ:
+                SUCCESS → Park manevrası başlat
+                FAILURE → Tabela yok
+              KAYNAK: {sign_park} = true | false
+
+              Şartname Sayfa 28:
+              Başarılı park → +80 puan
+              Eksik park → +20 puan
+              Uygun olmayan yer → -20 puan
+            -->
+            <input_port name="sign_detected">BB key: {sign_park}</input_port>
+        </Condition>
+
+        <Condition ID="PedestrianCrossingCondition">
+            <!--
+              AMAÇ: B-14a YAYA GEÇİDİ tabelası algılandı mı?
+              DÖNÜŞ:
+                SUCCESS → Tabela görüş alanında, hız düşür
+                FAILURE → Tabela kayboldu, hızı geri al
+              KAYNAK: {sign_pedestrian} = true | false
+
+              Tabela kameradan kaybolunca Condition FAILURE döner
+              → SlowDownAction bir sonraki tick'te çalışmaz
+              → C++ içi restore_speed() tetiklenir
+            -->
+            <input_port name="sign_detected">BB key: {sign_pedestrian}</input_port>
+        </Condition>
+
+        <Condition ID="RoundaboutCondition">
+            <!--
+              AMAÇ: TT-37 ADA ETRAFINDA DÖNÜNÜZ tabelası algılandı mı?
+              DÖNÜŞ:
+                SUCCESS → Tabela görüldü → RoundaboutAction (stub)
+                FAILURE → Tabela yok
+              KAYNAK: {sign_roundabout} = true | false
+
+              Şartname Sayfa 20: Resmi tabela listesinde yer alır.
+              Nav2, döner kavşağı harita üzerinden zaten doğru geçiyor.
+              Bu node BT'de görünürlük ve hakem kanıtı sağlar.
+            -->
+            <input_port name="sign_detected">BB key: {sign_roundabout}</input_port>
+        </Condition>
+
+        <Condition ID="TunnelCondition">
+            <!--
+              AMAÇ: B-49a TÜNEL tabelası algılandı mı?
+              DÖNÜŞ:
+                SUCCESS → Tünel girişi tespit edildi → TunnelAction
+                FAILURE → Tünel yok
+              KAYNAK: {sign_tunnel} = true | false
+
+              Şartname Sayfa 30:
+              "Tünelin kullanılması yalnızca bir defa ekstra puan
+               katkısı sağlayacaktır, opsiyoneldir." → +200 puan
+
+              Parkur diyagramında (Sayfa 19) tünel sol tarafta
+              görünmektedir.
+            -->
+            <input_port name="sign_detected">BB key: {sign_tunnel}</input_port>
+        </Condition>
+
+        <Condition ID="PassByCondition">
+            <!--
+              AMAÇ: TT-36a veya TT-36b tabelası algılandı mı?
+              DÖNÜŞ:
+                SUCCESS → "right" (TT-36a) veya "left" (TT-36b)
+                FAILURE → "" (tabela yok)
+              KAYNAK: {sign_pass_by} = "right" | "left" | ""
+
+              Senaryo 2'de kapalı yollar ve statik engeller var.
+              Bu tabela o engellerle birlikte kullanılır.
+            -->
+            <input_port name="sign_detected">BB key: {sign_pass_by} — "right" | "left"</input_port>
+        </Condition>
+
+        <Condition ID="NoEntryCondition">
+            <!--
+              AMAÇ: TT-4 GİRİŞİ OLMAYAN YOL tabelası algılandı mı?
+              DÖNÜŞ:
+                SUCCESS → O yol kapalı, rota değiştir
+                FAILURE → Tabela yok
+              KAYNAK: {sign_no_entry} = true | false
+
+              Senaryo 2 için kritik: "kısmen veya tamamen kapalı yollar"
+              Bu tabelayı görmeden önce Nav2 o yolu deneyebilir.
+              NoEntryAction costmap'te o kenarı lethal yapar.
+            -->
+            <input_port name="sign_detected">BB key: {sign_no_entry}</input_port>
+        </Condition>
+
+        <Condition ID="ForbiddenTurnCondition">
+            <!--
+              AMAÇ: TT-26a (sağa dönülmez) veya TT-26b (sola dönülmez)?
+              DÖNÜŞ:
+                SUCCESS → "right" veya "left"
+                FAILURE → "" (tabela yok)
+              KAYNAK: {sign_forbidden} = "right" | "left" | ""
+            -->
+            <input_port name="sign_detected">BB key: {sign_forbidden} — "right" | "left"</input_port>
+        </Condition>
+
+        <Condition ID="MandatoryTurnCondition">
+            <!--
+              AMAÇ: TT-35a/b/c/d/e/g/h varyantlarından biri görüldü mü?
+              DÖNÜŞ:
+                SUCCESS → "TT-35X:yön" formatında string
+                FAILURE → "" (tabela yok)
+              KAYNAK: {sign_mandatory}
+
+              Format örnekleri:
+              "TT-35a:right"              → sağa
+              "TT-35b:left"               → sola
+              "TT-35c:forward"            → ileri
+              "TT-35d:forward_right"      → ileri ve sağa
+              "TT-35e:forward_left"       → ileri ve sola
+              "TT-35g:from_forward_right" → ileriden sağa
+              "TT-35h:from_forward_left"  → ileriden sola
+            -->
+            <input_port name="sign_detected">BB key: {sign_mandatory} — "TT-35X:yön"</input_port>
+        </Condition>
+
+        <!-- ═══════════════════════════════════════════
+             CUSTOM ACTION NODE'LARI
+        ═══════════════════════════════════════════ -->
+
+        <Action ID="InitMissionAction">
+            <!--
+              GEOJSON Loader.
+
+              Senaryo 2 için GEOJSON içeriği:
+              {
+                "start":     { koordinat },
+                "park_giris": { koordinat }
+              }
+              Yolcu noktası (gorev_X) YOKTUR — Senaryo 2'de yolcu yok.
+
+              Koordinatları geometry_msgs/PoseStamped listesine çevirir.
+              {goals} blackboard key'ine yazar.
+
+              DÖNÜŞ:
+              SUCCESS → goals yüklendi, BT devam eder
+              FAILURE → dosya bulunamadı / parse hatası → BT durur
+            -->
+            <output_port name="goals">
+                Parse edilmiş waypoint listesi.
+                Senaryo 2: [start_pose, park_giris_pose]
+            </output_port>
+        </Action>
+
+        <Action ID="StopSignAction">
+            <!--
+              TT-2 DUR:
+              1. Araç velocity komutu → 0 (tam dur)
+              2. 3 saniye bekle
+              3. SUCCESS dön → ReactiveFallback döngüsü devam eder
+                 (Tabela hâlâ görünüyorsa Condition tekrar SUCCESS dönebilir
+                  → bu durumda C++ içinde "zaten durdum" flag'i kontrol edilmeli)
+            -->
+        </Action>
+
+        <Action ID="BusStopAction">
+            <!--
+              B-22 DURAK:
+              StopSignAction ile birebir aynı yapı.
+              Bekleme süresi ayrı C++ parametresinden alınır.
+              Öneri: rosparam ile ayarlanabilir, varsayılan 5 sn.
+            -->
+        </Action>
+
+        <Action ID="ParkingAction">
+            <!--
+              Park Manevrası — Senaryo 2 için tam uygulama:
+
+              1. Mevcut konum: park_giris noktasına ulaşıldı
+                 (NavigateThroughPoses tarafından getirildi)
+              2. Timer başlat: 3 dakika (Şartname Sayfa 28)
+              3. Uygun spot ara:
+                 a. P-3a tabelası var mı?       → evet: uygun
+                 b. P-1 (yasak) tabelası yok mu? → yok: uygun
+                 c. Spotta engel/araç var mı?    → yok: uygun
+                 d. Şerit çizgileri tam mı?      → evet: uygun
+              4. Dik park manevrası yap
+              5. Tekerlek kontrolü: şerit içinde mi?
+              6. Timer dolmadan SUCCESS → +80 puan
+                 Timer dolarsa FAILURE → park geçersiz
+
+              Timer, spot seçimi, tabela ve engel kontrolleri
+              tamamen C++ içinde yönetilir.
+            -->
+        </Action>
+
+        <Action ID="SlowDownAction">
+            <!--
+              Yaya Geçidi Hız Düşürme:
+              Nav2 controller'ın max_vel_x parametresini
+              geçici olarak düşürür (örn: 0.5 m/s).
+
+              PedestrianCrossingCondition FAILURE dönünce
+              bu action çağrılmaz → C++ içindeki
+              restore_speed() fonksiyonu normal hızı geri yükler.
+
+              Senaryo 2'de yaya geçidi dinamik konumda olabilir
+              (Şartname Sayfa 24: "yaya geçidi konumu dinamik
+               olarak güncellenebilir").
+            -->
+        </Action>
+
+        <Action ID="RoundaboutAction">
+            <!--
+              TT-37 ADA ETRAFINDA DÖNÜNÜZ — STUB:
+
+              Nav2 döner kavşağı haritadaki yol geometrisinden
+              zaten doğru geçiyor. Ek BT müdahalesi gerekmiyor.
+
+              C++ implementasyonu:
+                BT::NodeStatus tick() override {
+                    return BT::NodeStatus::SUCCESS;
+                }
+
+              Bu node'un BT'de bulunma nedeni:
+              Hakem "Bu tabelayı gördüğünüzde ne yaptınız?"
+              diye sorduğunda gösterebilmek.
+            -->
+        </Action>
+
+        <Action ID="TunnelAction">
+            <!--
+              B-49a TÜNEL — +200 Puan:
+
+              C++ implementasyonu adımları:
+              1. static bool tunnel_used = false; kontrolü
+                 → Şartname: "yalnızca bir defa puan katkısı"
+                 → Zaten kullanıldıysa direkt SUCCESS dön
+              2. Tünel girişini onayla (tabela veya GEOJSON noktası)
+              3. Nav2 max_vel düşür (tünel dar olabilir)
+              4. NavigateThroughPoses tünelden geçirsin
+              5. Tünel çıkışı tespit et
+              6. Hızı normale döndür
+              7. tunnel_used = true; yaz
+              8. SUCCESS dön
+
+              Parkur diyagramında (Şartname Sayfa 19) tünel
+              sol üst bölgede görünmektedir.
+            -->
+        </Action>
+
+        <Action ID="PassByAction">
+            <!--
+              TT-36a/b Engel Bypass:
+
+              direction="right" (TT-36a SAĞDAN GİDİNİZ):
+                Nav2 costmap'te engelin sol tarafına lethal bölge ekle
+                → planner sağ taraftan geçen rota hesaplar
+
+              direction="left" (TT-36b SOLDAN GİDİNİZ):
+                Nav2 costmap'te engelin sağ tarafına lethal bölge ekle
+                → planner sol taraftan geçen rota hesaplar
+
+              Senaryo 2 için önemli: statik engel + PassBy tabelası
+              kombinasyonu sık karşılaşılacak senaryo.
+            -->
+            <input_port name="direction">Geçiş yönü: "right" (TT-36a) | "left" (TT-36b)</input_port>
+        </Action>
+
+        <Action ID="NoEntryAction">
+            <!--
+              TT-4 Yol Kapatma:
+
+              1. current_vertex'e giden topoloji kenarını bul
+              2. O kenarı costmap'te lethal işaretle
+              3. Nav2 global planner'ı yeniden tetikle
+              4. Yeni rota hesaplandı
+              5. next_vertex'e yeni hedefi yaz (output port)
+              6. SUCCESS dön
+
+              Senaryo 2 için kritik: "kısmen veya tamamen kapalı yollar"
+              Bu tabelayı görmeden Nav2 o yolu deneyebilir ve
+              takılabilir. NoEntryAction proaktif olarak yolu kapatır.
+            -->
+            <input_port name="current_vertex">Girişi kapalı yolun vertex indeksi</input_port>
+            <output_port name="next_vertex">Yeniden planlama sonrası alternatif vertex</output_port>
+        </Action>
+
+        <Action ID="ForbiddenTurnAction">
+            <!--
+              TT-26a/b Yasak Dönüş:
+
+              1. Planlanan dönüş yönünü belirle (right veya left)
+              2. O yön için costmap kısıtı ekle
+              3. Nav2 global planner'ı yeniden tetikle
+              4. Alternatif rota (düz devam veya karşı taraftan dönüş)
+              5. next_vertex'e yeni hedefi yaz
+              6. SUCCESS dön
+            -->
+            <input_port name="current_vertex">Mevcut topoloji vertex indeksi</input_port>
+            <output_port name="next_vertex">Yasak dönüşü atlayan alternatif vertex</output_port>
+        </Action>
+
+        <Action ID="MandatoryTurnAction">
+            <!--
+              TT-35a-h Mecburi Yön — 7 Varyant:
+
+              sign_data parse mantığı:
+              token = sign_data.split(":")
+              tabela_kodu = token[0]  // "TT-35a", "TT-35d", ...
+              yon = token[1]          // "right", "forward_right", ...
+
+              Yön → Nav2 hedefi dönüşümü:
+              "right"              → sağ yöndeki vertex hedef al
+              "left"               → sol yöndeki vertex hedef al
+              "forward"            → düz gidecek vertex hedef al
+              "forward_right"      → sağ ve düz arasındaki en uygun
+              "forward_left"       → sol ve düz arasındaki en uygun
+              "from_forward_right" → ileriden sağa kıvrılan yol
+              "from_forward_left"  → ileriden sola kıvrılan yol
+
+              Nav2 global planner yeniden tetiklenir.
+            -->
+            <input_port name="sign_data">Tabela kodu + yön. Format: "TT-35X:yön"</input_port>
+            <input_port name="current_vertex">Mevcut topoloji vertex indeksi</input_port>
+            <output_port name="next_vertex">Mecburi yöne göre hesaplanan hedef vertex</output_port>
+        </Action>
+
+    </TreeNodesModel>
+</root>

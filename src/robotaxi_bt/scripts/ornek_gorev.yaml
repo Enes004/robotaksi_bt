@@ -1,0 +1,99 @@
+mission:
+  source_file: ornek_gorev.geojson
+  generated_at: '2026-04-19T17:01:29.899061'
+  coordinate_method: UTM
+  datum:
+    latitude: 40.790343
+    longitude: 29.509014
+  total_waypoints: 5
+  waypoints:
+  - name: start
+    type: start
+    description: Araç başlangıç konumu
+    gps:
+      latitude: 40.790343
+      longitude: 29.509014
+    index: 0
+    pose:
+      frame_id: map
+      position:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      orientation:
+        x: 0.0
+        y: 0.0
+        z: -0.853475
+        w: 0.521134
+  - name: gorev_1
+    type: gorev
+    description: 1. görev noktası
+    gps:
+      latitude: 40.789785
+      longitude: 29.50861
+    index: 1
+    pose:
+      frame_id: map
+      position:
+        x: -32.3162
+        y: -62.9256
+        z: 0.0
+      orientation:
+        x: 0.0
+        y: 0.0
+        z: 0.525306
+        w: 0.850914
+  - name: gorev_2
+    type: gorev
+    description: 2. görev noktası
+    gps:
+      latitude: 40.789949
+      longitude: 29.508726
+    index: 2
+    pose:
+      frame_id: map
+      position:
+        x: -23.0492
+        y: -44.438
+        z: 0.0
+      orientation:
+        x: 0.0
+        y: 0.0
+        z: -0.403617
+        w: 0.914928
+  - name: gorev_3
+    type: gorev
+    description: 3. görev noktası
+    gps:
+      latitude: 40.789635
+      longitude: 29.509082
+    index: 3
+    pose:
+      frame_id: map
+      position:
+        x: 7.988
+        y: -78.4388
+        z: 0.0
+      orientation:
+        x: 0.0
+        y: 0.0
+        z: 0.64187
+        w: 0.766814
+  - name: park_giris
+    type: park_giris
+    description: Araç otopark giriş bölgesi noktası
+    gps:
+      latitude: 40.790149
+      longitude: 29.509223
+    index: 4
+    pose:
+      frame_id: map
+      position:
+        x: 18.2519
+        y: -21.0333
+        z: 0.0
+      orientation:
+        x: 0.0
+        y: 0.0
+        z: 0.64187
+        w: 0.766814

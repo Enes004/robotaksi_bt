@@ -1,0 +1,8 @@
+# TEKNOFEST 2026 Robotaksi — Waypoints
+# Kaynak: ornek_gorev.geojson
+# Format: isim tip x y qz qw
+start start 0.0000 0.0000 -0.853475 0.521134
+gorev_1 gorev -32.3162 -62.9256 0.525306 0.850914
+gorev_2 gorev -23.0492 -44.4380 -0.403617 0.914928
+gorev_3 gorev 7.9880 -78.4388 0.641870 0.766814
+park_giris park_giris 18.2519 -21.0333 0.641870 0.766814
