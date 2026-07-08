@@ -1,0 +1,493 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Teknofest 2026 Robotaksi - Hibrit BT Mimarisi v3
+  
+  DEĞİŞİKLİK NOTALARI (v2 → v3):
+  1. cruise_speed 0.60 → 1.50 m/s (şartname: yürüyüş hızı ~1.4 m/s üstü zorunlu)
+  2. Trafik ışığı/DUR/levha katmanları Tur≥2 kapısına alındı (Tur 1 fantom önleme)
+  3. Statik engel: yer yoksa → ReplanRoute (WaitForClear değil, şartname: "geçmemeli")
+  4. TwoWayRoadCondition geri eklendi (karşı şeride geçme koruması)
+  5. RecordMissionPoint SafeDrive içine taşındı (tüm segmentlerde +30 puan)
+  6. CheckStopAccuracy'ye heading toleransı eklendi
+  7. Uydurma hız limiti levhası (SPEED_LIMIT) kaldırıldı
+  8. TT-36a/b (sağdan/soldan gidiniz) ve TT-4 (girilmez) açık node eklendi
+  9. UMS-2 (Go sinyali) bekleme eklendi
+  10. Latch mantığı: ClearHandledFlags segment başında çağrılır
+-->
+<root main_tree_to_execute="MainTree">
+
+  <BehaviorTree ID="MainTree">
+    <Sequence name="Mission">
+      <!-- Hız parametreleri — cruise MUTLAKA > 1.4 m/s (yürüyüş hızı) -->
+      <SetBlackboard output_key="cruise_speed"       value="1.50" />
+      <SetBlackboard output_key="intersection_speed" value="0.50" />
+      <SetBlackboard output_key="roundabout_speed"   value="0.50" />
+      <SetBlackboard output_key="tunnel_speed"       value="0.50" />
+      <SetBlackboard output_key="parking_speed"      value="0.30" />
+
+      <LoadMission geojson_file="{geojson_file}" tour="{tour}"
+                   route="{route}" route_size="{route_size}" seg_index="{seg_index}" />
+
+      <!-- UMS-2 Go sinyali bekle (şartname sf.8) -->
+      <WaitForGoSignal />
+
+      <Fallback name="DriveWithRecovery">
+        <SubTree ID="DriveAllSegments" _autoremap="true" />
+        <SubTree ID="Recovery"         _autoremap="true" />
+      </Fallback>
+
+      <SubTree ID="FinishMission" _autoremap="true" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- ═══════════════ SEGMENT DÖNGÜSÜ ═══════════════ -->
+  <BehaviorTree ID="DriveAllSegments">
+    <Fallback>
+      <Repeat num_cycles="-1">
+        <Sequence name="SegmentLoop">
+          <HasMoreSegments seg_index="{seg_index}" route_size="{route_size}" />
+          <GetCurrentSegment route="{route}" seg_index="{seg_index}"
+                             seg_type="{seg_type}" seg_goal="{seg_goal}" seg_meta="{seg_meta}" />
+          <!-- Yeni segmente girince önceki handled bayraklarını temizle -->
+          <ClearHandledFlags />
+          <SubTree ID="ExecuteSegment" _autoremap="true" />
+          <AdvanceSegment seg_index="{seg_index}" />
+        </Sequence>
+      </Repeat>
+      <Inverter>
+        <HasMoreSegments seg_index="{seg_index}" route_size="{route_size}" />
+      </Inverter>
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- ═══════════════ SEGMENT ROUTER ═══════════════ -->
+  <BehaviorTree ID="ExecuteSegment">
+    <Fallback name="SegmentSwitch">
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="LANE_FOLLOW" />
+        <SubTree ID="Seg_LaneFollow" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="INTERSECTION" />
+        <SubTree ID="Seg_Intersection" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="ROUNDABOUT" />
+        <SubTree ID="Seg_Roundabout" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="TUNNEL" />
+        <SubTree ID="Seg_Tunnel" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="PASSENGER_STOP" />
+        <SubTree ID="Seg_PassengerStop" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="PARKING" />
+        <SubTree ID="Seg_Parking" _autoremap="true" />
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- ═══════════════ GÜVENLİ HAREKET ═══════════════
+       RecordMissionPoint artık burada — TÜM segmentlerde +30 puan kaydedilir -->
+  <BehaviorTree ID="SafeDrive">
+    <ReactiveSequence name="SafeDrive">
+      <SubTree ID="SafetyReflexes" _autoremap="true" />
+      <Sequence>
+        <RecordMissionPoint point="{seg_goal}" tolerance="1.0" />
+        <FollowLaneSegment goal="{seg_goal}" />
+      </Sequence>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- ═══════════════ GÜVENLİK REFLEKSLERİ ═══════════════
+       Katman 1-4: Her turda aktif (fiziksel tehlike)
+       Katman 5-7: Tur≥2 kapılı (ışık/tabela Tur 1'de sahada yok) -->
+  <BehaviorTree ID="SafetyReflexes">
+    <ReactiveSequence name="SafetyReflexes">
+
+      <!-- K1: Acil durdurma (UMS-1) — her turda -->
+      <Fallback>
+        <Inverter><EmergencyStopRequested /></Inverter>
+        <KeepRunningUntilFailure><StopVehicle /></KeepRunningUntilFailure>
+      </Fallback>
+
+      <!-- K2: Fiziksel yaya — her turda -->
+      <Fallback>
+        <Inverter><PedestrianAhead detected="{detected_pedestrian}" /></Inverter>
+        <Sequence>
+          <StopVehicle />
+          <WaitForClear hazard="pedestrian" />
+        </Sequence>
+      </Fallback>
+
+      <!-- K3: Dinamik engel — her turda (çarpma = diskalifiye) -->
+      <Fallback>
+        <Inverter><DynamicObstacleAhead detected="{detected_obstacle}" /></Inverter>
+        <Sequence>
+          <StopVehicle />
+          <WaitForClear hazard="dynamic" />
+        </Sequence>
+      </Fallback>
+
+      <!-- K4: Statik engel — her turda
+           DEĞİŞİKLİK: yer yoksa ReplanRoute (beklemek değil!) -->
+      <Fallback>
+        <Inverter><StaticObstacleInLane detected="{detected_static}" /></Inverter>
+        <SubTree ID="HandleStaticObstacle" _autoremap="true" />
+      </Fallback>
+
+      <!-- === TUR ≥ 2 KAPISI: Aşağıdaki katmanlar Tur 1'de atlanır === -->
+      <Fallback>
+        <Inverter><IsTrafficControlActive tour="{tour}" /></Inverter>
+        <ReactiveSequence name="TrafficControlLayers">
+
+          <!-- K5: Trafik ışığı -->
+          <Fallback>
+            <Inverter><TrafficLightAhead light_color="{light_color}" /></Inverter>
+            <SubTree ID="HandleTrafficLight" _autoremap="true" />
+          </Fallback>
+
+          <!-- K6: DUR tabelası (latch: StopAndProceed içinde handled bayrağı kullanır) -->
+          <Fallback>
+            <Inverter><StopSignAhead detected="{detected_signs}" /></Inverter>
+            <StopAndProceed />
+          </Fallback>
+
+          <!-- K7: Yol levhaları (B-50h/i şerit birleşmesi, B-14a yaya geçidi,
+                                  TT-36a/b sağdan/soldan gidiniz, TT-4 girilmez) -->
+          <Fallback>
+            <Inverter><GlobalRoadSignAhead sign_type="{detected_road_sign}" /></Inverter>
+            <SubTree ID="HandleRoadSigns" _autoremap="true" />
+          </Fallback>
+
+        </ReactiveSequence>
+      </Fallback>
+
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- ═══════════════ YARDIMCI AĞAÇLAR ═══════════════ -->
+
+  <!-- Statik engel: iki yönlü yol kontrolü + şerit değiştir VEYA replan -->
+  <BehaviorTree ID="HandleStaticObstacle">
+    <Fallback name="HandleStaticObstacle">
+      <!-- Şerit değiştir (SADECE tek yönlü yolda + boş şerit varsa) -->
+      <Sequence>
+        <Inverter><IsTwoWayRoad is_two_way="{is_two_way_road}" /></Inverter>
+        <AvoidanceSpaceAvailable free_lane="{free_lane}" />
+        <CalculateLaneChange current_pose="{current_pose}" target_lane="{free_lane}"
+                             detected_signs="{detected_signs}" seg_goal="{seg_goal}" />
+        <FollowLaneSegment goal="{seg_goal}" />
+      </Sequence>
+      <!-- Şerit değiştiremiyorsa → rotayı yeniden planla (BEKLEMEMELİ!) -->
+      <ForceSuccess>
+        <ReplanRoute reason="static_obstacle"
+                     route="{route}" route_size="{route_size}" seg_index="{seg_index}" />
+      </ForceSuccess>
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- Trafik ışığı: kırmızı → dur/bekle, yeşil → 5sn içinde kalk -->
+  <BehaviorTree ID="HandleTrafficLight">
+    <Sequence name="HandleTrafficLight">
+      <Fallback>
+        <Inverter><IsLightRed color="{light_color}" /></Inverter>
+        <Sequence>
+          <StopAtStopLine tolerance="5.0" />
+          <WaitForGreenLight light_color="{light_color}" />
+        </Sequence>
+      </Fallback>
+      <ProceedOnGreen light_color="{light_color}" max_react_sec="5.0" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- Yol levhaları: şartnamedeki tüm global tabelalar -->
+  <BehaviorTree ID="HandleRoadSigns">
+    <Fallback name="HandleRoadSigns">
+      <!-- B-50h/i: Şerit kapanıyor → şerit değiştir veya replan -->
+      <Sequence>
+        <IsRoadSignType sign_type="{detected_road_sign}" expected="LANE_MERGE" />
+        <SubTree ID="HandleStaticObstacle" _autoremap="true" />
+      </Sequence>
+      <!-- B-14a: Yaya geçidi tabelası → SADECE yaya varsa yavaşla (yoksa devam) -->
+      <Sequence>
+        <IsRoadSignType sign_type="{detected_road_sign}" expected="PEDESTRIAN_CROSS" />
+        <Fallback>
+          <Inverter><PedestrianAhead detected="{detected_pedestrian}" /></Inverter>
+          <Sequence>
+            <SetMaxSpeed speed="0.30" />
+            <WaitForClear hazard="pedestrian" />
+            <SetMaxSpeed speed="{cruise_speed}" />
+          </Sequence>
+        </Fallback>
+      </Sequence>
+      <!-- TT-36a/b: Sağdan/Soldan gidiniz → rotayı doğrula -->
+      <Sequence>
+        <IsRoadSignType sign_type="{detected_road_sign}" expected="PASS_DIRECTION" />
+        <ForceSuccess>
+          <ReplanRoute reason="pass_direction"
+                       route="{route}" route_size="{route_size}" seg_index="{seg_index}" />
+        </ForceSuccess>
+      </Sequence>
+      <!-- TT-4: Girilmez → rotayı yeniden planla -->
+      <Sequence>
+        <IsRoadSignType sign_type="{detected_road_sign}" expected="NO_ENTRY" />
+        <ForceSuccess>
+          <ReplanRoute reason="no_entry"
+                       route="{route}" route_size="{route_size}" seg_index="{seg_index}" />
+        </ForceSuccess>
+      </Sequence>
+      <!-- Bilinmeyen levha → logla, devam et -->
+      <LogUnknownSign sign_type="{detected_road_sign}" />
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- ═══════════════ SEGMENT TİPLERİ ═══════════════ -->
+
+  <!-- LANE_FOLLOW: düz yol (RecordMissionPoint artık SafeDrive'da) -->
+  <BehaviorTree ID="Seg_LaneFollow">
+    <Sequence name="Seg_LaneFollow">
+      <SetMaxSpeed speed="{cruise_speed}" />
+      <SubTree ID="SafeDrive" _autoremap="true" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- INTERSECTION: yavaşla + dönüş kontrol + geç -->
+  <BehaviorTree ID="Seg_Intersection">
+    <Sequence name="Seg_Intersection">
+      <SetMaxSpeed speed="{intersection_speed}" />
+      <Fallback>
+        <Inverter><IsTrafficControlActive tour="{tour}" /></Inverter>
+        <ForceSuccess>
+          <SubTree ID="ValidateTurn" _autoremap="true" />
+        </ForceSuccess>
+      </Fallback>
+      <SubTree ID="SafeDrive" _autoremap="true" />
+      <SetMaxSpeed speed="{cruise_speed}" />
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="ValidateTurn">
+    <Fallback name="ValidateTurn">
+      <Inverter>
+        <TurnConflictsWithSigns planned_turn="{planned_turn}" detected_signs="{detected_signs}" />
+      </Inverter>
+      <ForceSuccess>
+        <ReplanRoute reason="sign_conflict"
+                     route="{route}" route_size="{route_size}" seg_index="{seg_index}" />
+      </ForceSuccess>
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- ROUNDABOUT: boşluk bekle + güvenli geç -->
+  <BehaviorTree ID="Seg_Roundabout">
+    <Sequence name="Seg_Roundabout">
+      <SetMaxSpeed speed="{roundabout_speed}" />
+      <YieldAtRoundabout />
+      <SubTree ID="SafeDrive" _autoremap="true" />
+      <SetMaxSpeed speed="{cruise_speed}" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- TUNNEL: far aç → geç → kapat -->
+  <BehaviorTree ID="Seg_Tunnel">
+    <Sequence name="Seg_Tunnel">
+      <SetMaxSpeed speed="{tunnel_speed}" />
+      <TurnHeadlights state="on" />
+      <SubTree ID="SafeDrive" _autoremap="true" />
+      <TurnHeadlights state="off" />
+      <SetMaxSpeed speed="{cruise_speed}" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- PASSENGER_STOP: dur + heading kontrolü + 15-20sn + sinyal -->
+  <BehaviorTree ID="Seg_PassengerStop">
+    <Sequence name="Seg_PassengerStop">
+      <SubTree ID="SafeDrive" _autoremap="true" />
+      <StopVehicle />
+      <Fallback name="EnsureAccuracy">
+        <CheckStopAccuracy point="{seg_goal}" tolerance="1.0" heading_tolerance="15.0" />
+        <Sequence>
+          <FollowLaneSegment goal="{seg_goal}" />
+          <StopVehicle />
+          <CheckStopAccuracy point="{seg_goal}" tolerance="1.0" heading_tolerance="15.0" />
+        </Sequence>
+      </Fallback>
+      <Dwell min_sec="15" max_sec="20" />
+      <SignalPassengerEvent event_type="{seg_meta}" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- PARKING: giriş + slot bul (P-3a var, P-1 yok, önü boş) + park -->
+  <BehaviorTree ID="Seg_Parking">
+    <Sequence name="Seg_Parking">
+      <SetMaxSpeed speed="{parking_speed}" />
+      <SubTree ID="SafeDrive" _autoremap="true" />
+      <RecordParkEntryReached />
+      <FindParkingSlot slot_pose="{slot_pose}" />
+      <ExecuteParking slot="{slot_pose}" time_limit_sec="180" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- ═══════════════ KURTARMA & BİTİŞ ═══════════════ -->
+  <BehaviorTree ID="Recovery">
+    <Sequence name="Recovery">
+      <IsStuck />
+      <BackUp backup_dist="0.30" backup_speed="0.05" time_allowance="10" />
+      <Spin spin_dist="1.57" time_allowance="10" />
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="FinishMission">
+    <StopVehicle />
+  </BehaviorTree>
+
+  <!-- ═══════════════ GROOT NODE MODELLERİ ═══════════════ -->
+  <TreeNodesModel>
+    <Action ID="LoadMission">
+      <input_port name="geojson_file" type="std::string" />
+      <input_port name="tour" type="int" />
+      <output_port name="route" type="std::string" />
+      <output_port name="route_size" type="int" />
+      <output_port name="seg_index" type="int" />
+    </Action>
+    <Action ID="GetCurrentSegment">
+      <input_port name="route" type="std::string" />
+      <input_port name="seg_index" type="int" />
+      <output_port name="seg_type" type="std::string" />
+      <output_port name="seg_goal" type="std::string" />
+      <output_port name="seg_meta" type="std::string" />
+    </Action>
+    <Action ID="AdvanceSegment">
+      <inout_port name="seg_index" type="int" />
+    </Action>
+    <Action ID="ClearHandledFlags" />
+    <Action ID="WaitForGoSignal" />
+    <Action ID="SetMaxSpeed">
+      <input_port name="speed" type="double" />
+    </Action>
+    <Action ID="FollowLaneSegment">
+      <input_port name="goal" type="std::string" />
+    </Action>
+    <Action ID="StopVehicle" />
+    <Action ID="WaitForClear">
+      <input_port name="hazard" type="std::string" />
+    </Action>
+    <Action ID="StopAtStopLine">
+      <input_port name="tolerance" type="double" />
+    </Action>
+    <Action ID="WaitForGreenLight">
+      <input_port name="light_color" type="std::string" />
+    </Action>
+    <Action ID="ProceedOnGreen">
+      <input_port name="light_color" type="std::string" />
+      <input_port name="max_react_sec" type="double" />
+    </Action>
+    <Action ID="StopAndProceed" />
+    <Action ID="CalculateLaneChange">
+      <input_port name="current_pose" type="std::string" />
+      <input_port name="target_lane" type="std::string" />
+      <input_port name="detected_signs" type="std::string" />
+      <output_port name="seg_goal" type="std::string" />
+    </Action>
+    <Action ID="ReplanRoute">
+      <input_port name="reason" type="std::string" />
+      <output_port name="route" type="std::string" />
+      <output_port name="route_size" type="int" />
+      <output_port name="seg_index" type="int" />
+    </Action>
+    <Action ID="TurnHeadlights">
+      <input_port name="state" type="std::string" />
+    </Action>
+    <Action ID="YieldAtRoundabout" />
+    <Action ID="Dwell">
+      <input_port name="min_sec" type="double" />
+      <input_port name="max_sec" type="double" />
+    </Action>
+    <Action ID="SignalPassengerEvent">
+      <input_port name="event_type" type="std::string" />
+    </Action>
+    <Action ID="RecordMissionPoint">
+      <input_port name="point" type="std::string" />
+      <input_port name="tolerance" type="double" />
+    </Action>
+    <Action ID="RecordParkEntryReached" />
+    <Action ID="FindParkingSlot">
+      <output_port name="slot_pose" type="std::string" />
+    </Action>
+    <Action ID="ExecuteParking">
+      <input_port name="slot" type="std::string" />
+      <input_port name="time_limit_sec" type="double" />
+    </Action>
+    <Action ID="LogUnknownSign">
+      <input_port name="sign_type" type="std::string" />
+    </Action>
+    <Action ID="BackUp">
+      <input_port name="backup_dist" type="double" />
+      <input_port name="backup_speed" type="double" />
+      <input_port name="time_allowance" type="double" />
+    </Action>
+    <Action ID="Spin">
+      <input_port name="spin_dist" type="double" />
+      <input_port name="time_allowance" type="double" />
+    </Action>
+
+    <Condition ID="HasMoreSegments">
+      <input_port name="seg_index" type="int" />
+      <input_port name="route_size" type="int" />
+    </Condition>
+    <Condition ID="IsSegmentType">
+      <input_port name="seg_type" type="std::string" />
+      <input_port name="expected" type="std::string" />
+    </Condition>
+    <Condition ID="IsTrafficControlActive">
+      <input_port name="tour" type="int" />
+    </Condition>
+    <Condition ID="EmergencyStopRequested" />
+    <Condition ID="PedestrianAhead">
+      <input_port name="detected" type="bool" />
+    </Condition>
+    <Condition ID="DynamicObstacleAhead">
+      <input_port name="detected" type="bool" />
+    </Condition>
+    <Condition ID="StaticObstacleInLane">
+      <input_port name="detected" type="bool" />
+    </Condition>
+    <Condition ID="AvoidanceSpaceAvailable">
+      <input_port name="free_lane" type="std::string" />
+    </Condition>
+    <Condition ID="IsTwoWayRoad">
+      <input_port name="is_two_way" type="bool" />
+    </Condition>
+    <Condition ID="TrafficLightAhead">
+      <output_port name="light_color" type="std::string" />
+    </Condition>
+    <Condition ID="IsLightRed">
+      <input_port name="color" type="std::string" />
+    </Condition>
+    <Condition ID="StopSignAhead">
+      <input_port name="detected" type="std::string" />
+    </Condition>
+    <Condition ID="TurnConflictsWithSigns">
+      <input_port name="planned_turn" type="std::string" />
+      <input_port name="detected_signs" type="std::string" />
+    </Condition>
+    <Condition ID="CheckStopAccuracy">
+      <input_port name="point" type="std::string" />
+      <input_port name="tolerance" type="double" />
+      <input_port name="heading_tolerance" type="double" />
+    </Condition>
+    <Condition ID="GlobalRoadSignAhead">
+      <output_port name="sign_type" type="std::string" />
+    </Condition>
+    <Condition ID="IsRoadSignType">
+      <input_port name="sign_type" type="std::string" />
+      <input_port name="expected" type="std::string" />
+    </Condition>
+    <Condition ID="IsStuck" />
+  </TreeNodesModel>
+
+</root>

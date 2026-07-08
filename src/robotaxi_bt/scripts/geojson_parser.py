@@ -676,6 +676,128 @@ class GeoJSONMissionParser:
 
         return json.dumps(summary, indent=2, ensure_ascii=False)
 
+    def print_segment_mapping(self):
+        """Görev noktalarını segment tiplerine eşleyerek göster.
+
+        Segment BT mimarisi ile uyumluluk için:
+        - start → LANE_FOLLOW (başlangıç segmenti)
+        - gorev_N → PASSENGER_STOP (yolcu durağı segmenti)
+        - park_giris → PARKING (park segmenti)
+
+        Bu eşleme, segment_map.yaml'ı doldurmak için rehber olarak kullanılır.
+        """
+        ordered = self.get_mission_order()
+
+        print()
+        print(f"{C.BOLD}{C.CYAN}╔══════════════════════════════════════════════════════════════════╗{C.RESET}")
+        print(f"{C.BOLD}{C.CYAN}║  Segment BT — Görev Noktası ↔ Segment Eşlemesi                 ║{C.RESET}")
+        print(f"{C.BOLD}{C.CYAN}╚══════════════════════════════════════════════════════════════════╝{C.RESET}")
+        print()
+
+        # Segment tip eşleme tablosu
+        SEGMENT_MAP = {
+            'start': 'LANE_FOLLOW',
+            'gorev': 'PASSENGER_STOP',
+            'park_giris': 'PARKING',
+        }
+
+        print(f"  {C.BOLD}{'#':<4} {'Nokta':<14} {'Segment Tipi':<18} {'Lokal (x,y)':<24} Açıklama{C.RESET}")
+        print(f"  {'─' * 74}")
+
+        segments = []
+        for i, p in enumerate(ordered):
+            seg_type = SEGMENT_MAP.get(p.point_type, 'LANE_FOLLOW')
+            info = p.type_info
+
+            local_str = ''
+            if p.local_x is not None:
+                local_str = f'({p.local_x:+.2f}, {p.local_y:+.2f})'
+
+            print(f"  {info['color']}{i:<4} {p.name:<14} {seg_type:<18} {local_str:<24} {p.description}{C.RESET}")
+
+            segments.append({
+                'name': p.name,
+                'type': p.bt_goal_type,
+                'segment_type': seg_type,
+                'x': round(p.local_x, 4) if p.local_x else 0.0,
+                'y': round(p.local_y, 4) if p.local_y else 0.0,
+            })
+
+        print(f"  {'─' * 74}")
+        print()
+
+        # Araya eklenmesi gereken segmentler hakkında bilgi
+        print(f"  {C.YELLOW}{C.BOLD}Segment Haritası Tamamlama Notları:{C.RESET}")
+        print(f"  {C.DIM}Bu noktalar arasındaki LANE_FOLLOW, INTERSECTION, ROUNDABOUT, TUNNEL{C.RESET}")
+        print(f"  {C.DIM}segmentleri segment_map.yaml'a elle eklenmelidir.{C.RESET}")
+        print(f"  {C.DIM}Koordinatlar harita ekibinden gelecek.{C.RESET}")
+        print()
+
+        # Segment zincir önerisi
+        print(f"  {C.BOLD}Önerilen Segment Zinciri:{C.RESET}")
+        print(f"  {C.DIM}START → ", end='')
+        for i, s in enumerate(segments):
+            if i > 0:
+                print(f"→ LANE_FOLLOW → ", end='')
+            print(f"{s['segment_type']}({s['name']})", end=' ')
+        print(f"{C.RESET}")
+        print()
+
+        return segments
+
+    def save_segment_yaml(self, output_path: str = None) -> str:
+        """Segment BT uyumlu YAML çıktısı üret.
+
+        segment_map.yaml için temel düğüm tanımları.
+        Kenarlar (segment bağlantıları) elle eklenmelidir.
+        """
+        ordered = self.get_mission_order()
+
+        SEGMENT_MAP = {
+            'start': 'LANE_FOLLOW',
+            'gorev': 'PASSENGER_STOP',
+            'park_giris': 'PARKING',
+        }
+
+        if output_path is None:
+            output_path = str(self.filepath.with_name('segment_map_nodes.yaml'))
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write('# Segment BT — Otomatik üretilen düğüm tanımları\n')
+            f.write(f'# Kaynak: {self.filepath.name}\n')
+            f.write(f'# Oluşturulma: {datetime.now().isoformat()}\n')
+            f.write('#\n')
+            f.write('# NOT: Bu dosya sadece görev noktası düğümlerini içerir.\n')
+            f.write('# Kavşak, tünel, dönel kavşak düğümlerini ve tüm segmentleri\n')
+            f.write('# (kenarları) elle ekleyin.\n\n')
+
+            f.write('nodes:\n')
+            for p in ordered:
+                node_id = f'N_{p.name.upper()}'
+                x = round(p.local_x, 4) if p.local_x else 0.0
+                y = round(p.local_y, 4) if p.local_y else 0.0
+                seg_type = SEGMENT_MAP.get(p.point_type, 'LANE_FOLLOW')
+                f.write(f'  {node_id}: {{x: {x}, y: {y}}}  '
+                        f'# {p.name} ({seg_type})\n')
+
+            f.write('\n# TODO: Kavşak, tünel, dönel kavşak düğümlerini ekle\n')
+            f.write('# Örnek:\n')
+            f.write('#   N_INT_A: {x: 10.0, y: 0.0}  # Kavşak A\n')
+            f.write('#   N_TUN_IN: {x: 3.0, y: -5.0}  # Tünel girişi\n')
+            f.write('#   N_RND: {x: 15.0, y: -8.0}  # Dönel kavşak\n\n')
+
+            f.write('segments:\n')
+            f.write('# TODO: Segmentleri (kenarları) elle ekle\n')
+            f.write('# Örnek:\n')
+            f.write('#   - {id: S_START_A, from: N_START, to: N_INT_A, '
+                    'type: LANE_FOLLOW, lane: right}\n')
+            f.write('#   - {id: S_DURAK_1, from: N_RND, to: N_GOREV_1, '
+                    'type: PASSENGER_STOP, meta: gorev_1}\n')
+            f.write('#   - {id: S_PARK, from: N_GOREV_3, to: N_PARK_GIRIS, '
+                    'type: PARKING}\n')
+
+        return output_path
+
 
 # ═══════════════════════════════════════════════════════════════════
 # ÖRNEK GEOJSON OLUŞTURUCU (Test amaçlı)
@@ -794,6 +916,8 @@ def main():
                         help='Datum noktası longitude (varsayılan: start noktası)')
     parser.add_argument('--waypoints', action='store_true',
                         help='InitMissionAction için waypoints.txt dosyası üret')
+    parser.add_argument('--segments', action='store_true',
+                        help='Segment BT uyumlu eşleme ve YAML düğüm dosyası üret')
     parser.add_argument('--no-color', action='store_true',
                         help='ANSI renk kodlarını devre dışı bırak')
 
@@ -850,6 +974,13 @@ def main():
         wp_path = mission.save_waypoints_txt()
         print(f"{C.GREEN}✅ Waypoints dosyası kaydedildi: {wp_path}{C.RESET}")
         print(f"{C.DIM}   InitMissionAction bu dosyayı otomatik okuyacak.{C.RESET}")
+
+    if args.segments:
+        mission.print_segment_mapping()
+        seg_path = mission.save_segment_yaml()
+        print(f"{C.GREEN}✅ Segment düğüm dosyası kaydedildi: {seg_path}{C.RESET}")
+        print(f"{C.DIM}   segment_map.yaml oluşturmak için bu dosyayı temel alın.{C.RESET}")
+        print(f"{C.DIM}   Kavşak/tünel/dönel düğümleri ve segmentleri elle ekleyin.{C.RESET}")
 
     # Uyarıları son olarak göster
     if mission.warnings and not args.json_summary:

@@ -1,0 +1,439 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  Teknofest 2026 Robotaksi - Segment Tabanli Behaviour Tree
+  Format: BehaviorTree.CPP v4  (Groot2 ile acilir)
+  ============================================================================
+  Mimari ozet:
+    * Harita = yonlu segment grafi. Her serit / her yon AYRI segment.
+    * Rotayi BT yonetir (LoadMission), Nav2 global planner DEGIL.
+    * Hareket tek soyut node arkasinda: FollowLaneSegment (icini takim doldurur:
+      vision lane-follow VEYA Nav2 FollowPath).
+    * Guvenlik refleksleri (acil>yaya>dinamik>statik) her hareketi saran
+      SafeDrive -> SafetyReflexes katmaninda; her segmentte otomatik gecerli.
+    * Tur farki blackboard {tour} ile: IsTrafficControlActive (tour>=2).
+    * Tekrar eden duz seritler ayni Seg_LaneFollow alt-agacini kullanir (DRY).
+  Detayli aciklama icin: segment_bt_mimari.md
+  ============================================================================
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+
+  <!-- ====================== ANA AGAC ====================== -->
+  <BehaviorTree ID="MainTree">
+    <Sequence name="Mission">
+      <!-- Hiz/parametre tohumlama (controller limitleri runtime'da SetMaxSpeed ile degisir) -->
+      <Script code="cruise_speed:=0.60; intersection_speed:=0.30; roundabout_speed:=0.30; tunnel_speed:=0.30; parking_speed:=0.20" />
+
+      <!-- GeoJSON + segment grafi -> rota (segment dizisi) -->
+      <LoadMission geojson_file="{geojson_file}" tour="{tour}"
+                   route="{route}" route_size="{route_size}" seg_index="{seg_index}" />
+
+      <!-- Rotayi yurut; basarisiz olursa basit kurtarma -->
+      <Fallback name="DriveWithRecovery">
+        <SubTree ID="DriveAllSegments" _autoremap="true" />
+        <SubTree ID="Recovery" _autoremap="true" />
+      </Fallback>
+
+      <SubTree ID="FinishMission" _autoremap="true" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- ====================== SEGMENT DONGUSU ====================== -->
+  <!-- Segmentler bitene kadar doner; bittiginde SUCCESS, gercek hata olursa FAILURE -->
+  <BehaviorTree ID="DriveAllSegments">
+    <Fallback>
+      <Repeat num_cycles="-1">
+        <Sequence name="SegmentLoop">
+          <HasMoreSegments seg_index="{seg_index}" route_size="{route_size}" />
+          <GetCurrentSegment route="{route}" seg_index="{seg_index}"
+                             seg_type="{seg_type}" seg_goal="{seg_goal}" seg_meta="{seg_meta}" />
+          <SubTree ID="ExecuteSegment" _autoremap="true" />
+          <AdvanceSegment seg_index="{seg_index}" />
+        </Sequence>
+      </Repeat>
+      <!-- Donguden cikis: gercekten segment kalmadiysa SUCCESS; kaldiysa (hata) FAILURE -->
+      <Inverter>
+        <HasMoreSegments seg_index="{seg_index}" route_size="{route_size}" />
+      </Inverter>
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- ====================== SEGMENT ROUTER (SWITCH) ====================== -->
+  <BehaviorTree ID="ExecuteSegment">
+    <Fallback name="SegmentSwitch">
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="LANE_FOLLOW" />
+        <SubTree ID="Seg_LaneFollow" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="INTERSECTION" />
+        <SubTree ID="Seg_Intersection" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="ROUNDABOUT" />
+        <SubTree ID="Seg_Roundabout" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="TUNNEL" />
+        <SubTree ID="Seg_Tunnel" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="PASSENGER_STOP" />
+        <SubTree ID="Seg_PassengerStop" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="LANE_CHANGE" />
+        <SubTree ID="Seg_LaneChange" _autoremap="true" />
+      </Sequence>
+      <Sequence>
+        <IsSegmentType seg_type="{seg_type}" expected="PARKING" />
+        <SubTree ID="Seg_Parking" _autoremap="true" />
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- ====================== TEKRAR KULLANILAN HAREKET PRIMITIFI ====================== -->
+  <!-- Her hareketli segment bunu cagirir: once guvenlik refleksleri, sonra asil hareket -->
+  <BehaviorTree ID="SafeDrive">
+    <ReactiveSequence name="SafeDrive">
+      <SubTree ID="SafetyReflexes" _autoremap="true" />
+      <FollowLaneSegment goal="{seg_goal}" />
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- Guvenlik refleksleri: acil > yaya > dinamik > statik. Her tick yeniden taranir. -->
+  <BehaviorTree ID="SafetyReflexes">
+    <ReactiveSequence name="SafetyReflexes">
+      <!-- 1) Acil durdurma (UMS-1 / acil stop) -->
+      <Fallback>
+        <Inverter>
+          <EmergencyStopRequested />
+        </Inverter>
+        <KeepRunningUntilFailure>
+          <StopVehicle />
+        </KeepRunningUntilFailure>
+      </Fallback>
+      <!-- 2) Yaya / yaya gecidi (B-14a) -->
+      <Fallback>
+        <Inverter>
+          <PedestrianAhead detected="{detected_pedestrian}" />
+        </Inverter>
+        <Sequence>
+          <StopVehicle />
+          <WaitForClear hazard="pedestrian" />
+        </Sequence>
+      </Fallback>
+      <!-- 3) Dinamik engel (carpma = diskalifiye) -->
+      <Fallback>
+        <Inverter>
+          <DynamicObstacleAhead detected="{detected_obstacle}" />
+        </Inverter>
+        <Sequence>
+          <StopVehicle />
+          <WaitForClear hazard="dynamic" />
+        </Sequence>
+      </Fallback>
+      <!-- 4) Statik engel: sakin (serit degis) ya da yer yoksa dur/yeniden planla -->
+      <Fallback>
+        <Inverter>
+          <StaticObstacleInLane detected="{detected_static}" />
+        </Inverter>
+        <SubTree ID="HandleStaticObstacle" _autoremap="true" />
+      </Fallback>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="HandleStaticObstacle">
+    <Fallback name="HandleStaticObstacle">
+      <!-- Yer varsa serit degistirip yeni hedefe yonel -->
+      <Sequence>
+        <AvoidanceSpaceAvailable free_lane="{free_lane}" />
+        <CalculateLaneChange current_pose="{current_pose}" target_lane="{free_lane}" seg_goal="{seg_goal}" />
+      </Sequence>
+      <!-- Yer yoksa dur ve engelin gecmesini/temizlenmesini bekle -->
+      <Sequence>
+        <StopVehicle />
+        <WaitForClear hazard="static" />
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- ====================== SEGMENT TIPLERI ====================== -->
+
+  <!-- Duz serit takibi: haritadaki ONLARCA duz serit AYNI bu alt-agaci kullanir (DRY) -->
+  <BehaviorTree ID="Seg_LaneFollow">
+    <Sequence name="Seg_LaneFollow">
+      <SetMaxSpeed speed="{cruise_speed}" />
+      <RecordMissionPoint point="{seg_meta}" tolerance="1.0" />
+      <SubTree ID="SafeDrive" _autoremap="true" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- Kavsak: yavasla -> (Tur>=2) isik/DUR/tabela -> gec -->
+  <BehaviorTree ID="Seg_Intersection">
+    <Sequence name="Seg_Intersection">
+      <SetMaxSpeed speed="{intersection_speed}" />
+      <Fallback>
+        <!-- Tur 1: trafik kontrolu pasif -> blok atlanir -->
+        <Inverter>
+          <IsTrafficControlActive tour="{tour}" />
+        </Inverter>
+        <Sequence>
+          <SubTree ID="HandleTrafficLight" _autoremap="true" />
+          <SubTree ID="HandleStopSign" _autoremap="true" />
+          <SubTree ID="ValidateTurn" _autoremap="true" />
+        </Sequence>
+      </Fallback>
+      <SubTree ID="SafeDrive" _autoremap="true" />
+      <SetMaxSpeed speed="{cruise_speed}" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- Isik puani kritik: kirmizida toleransta dur (+60), yesilde 5sn'de kalk (+40) -->
+  <BehaviorTree ID="HandleTrafficLight">
+    <Fallback name="HandleTrafficLight">
+      <Inverter>
+        <TrafficLightAhead light_color="{light_color}" />
+      </Inverter>
+      <Sequence>
+        <Fallback>
+          <Inverter>
+            <IsLightRed color="{light_color}" />
+          </Inverter>
+          <Sequence>
+            <StopAtStopLine tolerance="5.0" />
+            <WaitForGreenLight light_color="{light_color}" />
+          </Sequence>
+        </Fallback>
+        <ProceedOnGreen light_color="{light_color}" max_react_sec="5.0" />
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- DUR tabelasi (TT-2): tam dur, sonra gec -->
+  <BehaviorTree ID="HandleStopSign">
+    <Fallback name="HandleStopSign">
+      <Inverter>
+        <StopSignAhead detected="{detected_signs}" />
+      </Inverter>
+      <StopAndProceed />
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- Planlanan donus tabelayla celisiyorsa (TT-26/TT-4/TT-35) rotayi yeniden planla -->
+  <BehaviorTree ID="ValidateTurn">
+    <Fallback name="ValidateTurn">
+      <Inverter>
+        <TurnConflictsWithSigns planned_turn="{planned_turn}" detected_signs="{detected_signs}" />
+      </Inverter>
+      <ReplanRoute reason="sign_conflict"
+                   route="{route}" route_size="{route_size}" seg_index="{seg_index}" />
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- Donel kavsak (TT-37): bosluk bekle, dogru cikistan ayril -->
+  <BehaviorTree ID="Seg_Roundabout">
+    <Sequence name="Seg_Roundabout">
+      <SetMaxSpeed speed="{roundabout_speed}" />
+      <YieldAtRoundabout />
+      <ExecuteRoundabout exit_node="{seg_meta}" />
+      <SetMaxSpeed speed="{cruise_speed}" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- Tunel (B-49a): far ac, yavas gec, far kapat. Opsiyonel +200. -->
+  <BehaviorTree ID="Seg_Tunnel">
+    <Sequence name="Seg_Tunnel">
+      <SetMaxSpeed speed="{tunnel_speed}" />
+      <TurnHeadlights state="on" />
+      <SubTree ID="SafeDrive" _autoremap="true" />
+      <TurnHeadlights state="off" />
+      <SetMaxSpeed speed="{cruise_speed}" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- Yolcu durak (B-22): 1m hassasiyetle dur, 15-20 sn bekle. +70/nokta -->
+  <BehaviorTree ID="Seg_PassengerStop">
+    <Sequence name="Seg_PassengerStop">
+      <SubTree ID="SafeDrive" _autoremap="true" />
+      <StopVehicle />
+      <CheckStopAccuracy point="{seg_goal}" tolerance="1.0" />
+      <Dwell min_sec="15" max_sec="20" />
+      <SignalPassengerEvent event_type="{seg_meta}" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- Serit degisimi: engelden sakinma / B-50 serit duzenleme baglantisi -->
+  <BehaviorTree ID="Seg_LaneChange">
+    <Sequence name="Seg_LaneChange">
+      <CalculateLaneChange current_pose="{current_pose}" target_lane="{seg_meta}" seg_goal="{seg_goal}" />
+      <SubTree ID="SafeDrive" _autoremap="true" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- Park: girisi gec (+20), uygun slot bul, dik park (<=3dk) (+80) -->
+  <BehaviorTree ID="Seg_Parking">
+    <Sequence name="Seg_Parking">
+      <SetMaxSpeed speed="{parking_speed}" />
+      <SubTree ID="SafeDrive" _autoremap="true" />
+      <RecordParkEntryReached />
+      <FindParkingSlot slot_pose="{slot_pose}" />
+      <ExecuteParking slot="{slot_pose}" time_limit_sec="180" />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- ====================== KURTARMA & BITIS ====================== -->
+  <BehaviorTree ID="Recovery">
+    <Sequence name="Recovery">
+      <IsStuck />
+      <BackUp backup_dist="0.30" backup_speed="0.05" time_allowance="10" />
+      <Spin spin_dist="1.57" time_allowance="10" />
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="FinishMission">
+    <Sequence name="FinishMission">
+      <StopVehicle />
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- ====================== GROOT NODE MODELLERI ======================
+       BT executor bunu gerektirmez ama Groot2 custom node'lari
+       port'lariyla gosterebilmek icin kullanir. Gercek projede
+       BT::writeTreeNodesModelXML(factory) ile otomatik uretmen onerilir. -->
+  <TreeNodesModel>
+
+    <!-- ===== Action node'lari ===== -->
+    <Action ID="LoadMission">
+      <input_port name="geojson_file" type="std::string">GeoJSON dosya yolu</input_port>
+      <input_port name="tour" type="int">Tur numarasi 1/2/3</input_port>
+      <output_port name="route" type="std::string">Segment dizisi</output_port>
+      <output_port name="route_size" type="int">Segment sayisi</output_port>
+      <output_port name="seg_index" type="int">Baslangic indeksi (0)</output_port>
+    </Action>
+    <Action ID="GetCurrentSegment">
+      <input_port name="route" type="std::string" />
+      <input_port name="seg_index" type="int" />
+      <output_port name="seg_type" type="std::string">LANE_FOLLOW/INTERSECTION/...</output_port>
+      <output_port name="seg_goal" type="Pose2D">Segment bitis hedefi</output_port>
+      <output_port name="seg_meta" type="std::string">Tipe ozel veri (cikis dugumu, mission id vb.)</output_port>
+    </Action>
+    <Action ID="AdvanceSegment">
+      <inout_port name="seg_index" type="int" />
+    </Action>
+    <Action ID="SetMaxSpeed">
+      <input_port name="speed" type="double">m/s</input_port>
+    </Action>
+    <Action ID="FollowLaneSegment">
+      <input_port name="goal" type="Pose2D">Segment sonu</input_port>
+      <input_port name="max_speed" type="double" default="0.0">0 = mevcut limiti kullan</input_port>
+    </Action>
+    <Action ID="StopVehicle" />
+    <Action ID="WaitForClear">
+      <input_port name="hazard" type="std::string">pedestrian/dynamic/static</input_port>
+    </Action>
+    <Action ID="StopAtStopLine">
+      <input_port name="tolerance" type="double">metre</input_port>
+    </Action>
+    <Action ID="WaitForGreenLight">
+      <input_port name="light_color" type="std::string" />
+    </Action>
+    <Action ID="ProceedOnGreen">
+      <input_port name="light_color" type="std::string" />
+      <input_port name="max_react_sec" type="double" />
+    </Action>
+    <Action ID="StopAndProceed" />
+    <Action ID="CalculateLaneChange">
+      <input_port name="current_pose" type="Pose2D" />
+      <input_port name="target_lane" type="std::string" />
+      <output_port name="seg_goal" type="Pose2D">Guncellenen hedef</output_port>
+    </Action>
+    <Action ID="ReplanRoute">
+      <input_port name="reason" type="std::string" />
+      <output_port name="route" type="std::string" />
+      <output_port name="route_size" type="int" />
+      <output_port name="seg_index" type="int" />
+    </Action>
+    <Action ID="TurnHeadlights">
+      <input_port name="state" type="std::string">on/off</input_port>
+    </Action>
+    <Action ID="YieldAtRoundabout" />
+    <Action ID="ExecuteRoundabout">
+      <input_port name="exit_node" type="std::string" />
+    </Action>
+    <Action ID="Dwell">
+      <input_port name="min_sec" type="double" />
+      <input_port name="max_sec" type="double" />
+    </Action>
+    <Action ID="SignalPassengerEvent">
+      <input_port name="event_type" type="std::string">pickup/dropoff</input_port>
+    </Action>
+    <Action ID="RecordMissionPoint">
+      <input_port name="point" type="Pose2D" />
+      <input_port name="tolerance" type="double" />
+    </Action>
+    <Action ID="RecordParkEntryReached" />
+    <Action ID="FindParkingSlot">
+      <output_port name="slot_pose" type="Pose2D" />
+    </Action>
+    <Action ID="ExecuteParking">
+      <input_port name="slot" type="Pose2D" />
+      <input_port name="time_limit_sec" type="double" />
+    </Action>
+    <!-- Nav2 kurtarma node'lari -->
+    <Action ID="BackUp">
+      <input_port name="backup_dist" type="double" />
+      <input_port name="backup_speed" type="double" />
+      <input_port name="time_allowance" type="double" />
+    </Action>
+    <Action ID="Spin">
+      <input_port name="spin_dist" type="double" />
+      <input_port name="time_allowance" type="double" />
+    </Action>
+
+    <!-- ===== Condition node'lari ===== -->
+    <Condition ID="HasMoreSegments">
+      <input_port name="seg_index" type="int" />
+      <input_port name="route_size" type="int" />
+    </Condition>
+    <Condition ID="IsSegmentType">
+      <input_port name="seg_type" type="std::string" />
+      <input_port name="expected" type="std::string" />
+    </Condition>
+    <Condition ID="IsTrafficControlActive">
+      <input_port name="tour" type="int" />
+    </Condition>
+    <Condition ID="EmergencyStopRequested" />
+    <Condition ID="PedestrianAhead">
+      <input_port name="detected" type="bool" />
+    </Condition>
+    <Condition ID="DynamicObstacleAhead">
+      <input_port name="detected" type="bool" />
+    </Condition>
+    <Condition ID="StaticObstacleInLane">
+      <input_port name="detected" type="bool" />
+    </Condition>
+    <Condition ID="AvoidanceSpaceAvailable">
+      <input_port name="free_lane" type="std::string" />
+    </Condition>
+    <Condition ID="TrafficLightAhead">
+      <output_port name="light_color" type="std::string" />
+    </Condition>
+    <Condition ID="IsLightRed">
+      <input_port name="color" type="std::string" />
+    </Condition>
+    <Condition ID="StopSignAhead">
+      <input_port name="detected" type="std::string" />
+    </Condition>
+    <Condition ID="TurnConflictsWithSigns">
+      <input_port name="planned_turn" type="std::string" />
+      <input_port name="detected_signs" type="std::string" />
+    </Condition>
+    <Condition ID="CheckStopAccuracy">
+      <input_port name="point" type="Pose2D" />
+      <input_port name="tolerance" type="double" />
+    </Condition>
+    <Condition ID="IsStuck" />
+
+  </TreeNodesModel>
+</root>

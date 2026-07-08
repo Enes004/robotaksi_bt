@@ -10,6 +10,7 @@
 //   5. BT blackboard'a yazar
 //   6. Robot gider!
 
+// BT.CPP v4 uyumlu — header v4 include'ları kullanır
 #include "robotaxi_bt/init_mission_action.hpp"
 #include "rclcpp/rclcpp.hpp"
 

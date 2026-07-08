@@ -1,75 +1,86 @@
-// BT Test — InitMissionAction'ı dosyadan çalıştırıp test eder
+// BT Test — Segment BT node'larını test eder
 //
 // Kullanım:
 //   ros2 run robotaxi_bt bt_test
-//   ros2 run robotaxi_bt bt_test /tam/yol/waypoints.txt
+//   ros2 run robotaxi_bt bt_test /tam/yol/segment_bt.xml
+//
+// BT.CPP v3 uyumlu.
 
+#include "robotaxi_bt/segment_bt_nodes.hpp"
 #include "robotaxi_bt/init_mission_action.hpp"
 #include "behaviortree_cpp_v3/bt_factory.h"
 #include "rclcpp/rclcpp.hpp"
 #include <iostream>
+#include <filesystem>
 
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
 
-  // Komut satırından dosya yolu (opsiyonel)
-  std::string wp_file = "waypoints.txt";
-  if (argc > 1) {
-    wp_file = argv[1];
-  }
+  std::cout << "\n=== Segment BT Test ===" << std::endl;
 
-  std::cout << "\n=== InitMissionAction Test ===" << std::endl;
-  std::cout << "Waypoints dosyasi: " << wp_file << std::endl;
-  std::cout << std::endl;
-
-  // BT Factory — node'ları kaydet
+  // BT Factory — tüm node'ları kaydet
   BT::BehaviorTreeFactory factory;
+
+  // Segment BT node'ları (yeni)
+  robotaxi_bt::registerSegmentBTNodes(factory);
+
+  // Eski InitMissionAction (geriye dönük uyumluluk)
   factory.registerNodeType<robotaxi_bt::InitMissionAction>("InitMissionAction");
 
-  // Basit bir BT XML — sadece InitMissionAction'ı çalıştırır
-  std::string xml = R"(
-    <root main_tree_to_execute="TestTree">
-      <BehaviorTree ID="TestTree">
-        <Action ID="InitMissionAction"
-                waypoints_file=")" + wp_file + R"("
-                goals="{goals}"
-                current_goal_type="{current_goal_type}"
-                passenger_served="{passenger_served}"/>
-      </BehaviorTree>
-    </root>
-  )";
+  // Komut satırından XML dosya yolu (opsiyonel)
+  std::string xml_file;
+  if (argc > 1) {
+    xml_file = argv[1];
+  }
 
-  auto tree = factory.createTreeFromText(xml);
-  BT::NodeStatus result = tree.tickRoot();
+  if (!xml_file.empty() && std::filesystem::exists(xml_file)) {
+    // Dosyadan yükle
+    std::cout << "XML dosyasi: " << xml_file << std::endl;
 
-  // Sonuç
-  if (result == BT::NodeStatus::SUCCESS) {
-    std::cout << "\n✅ InitMissionAction BASARILI!" << std::endl;
+    try {
+      auto tree = factory.createTreeFromFile(xml_file);
+      std::cout << "\n✅ XML başarıyla yüklendi!" << std::endl;
+      std::cout << "   Kayıtlı node sayısı: " << factory.manifests().size() << std::endl;
 
-    // Blackboard'dan goals sayısını oku
-    auto bb = tree.rootBlackboard();
-    auto goals = bb->get<std::vector<geometry_msgs::msg::PoseStamped>>("goals");
-    auto goal_type = bb->get<std::string>("current_goal_type");
+      // İlk tick
+      std::cout << "\n--- İlk tick ---" << std::endl;
+      BT::NodeStatus result = tree.tickRoot();
+      std::cout << "Sonuç: " << BT::toStr(result) << std::endl;
 
-    std::cout << "   Yuklenen waypoint sayisi: " << goals.size() << std::endl;
-    std::cout << "   Ilk goal_type: " << goal_type << std::endl;
-
-    // Her waypoint'i göster
-    for (size_t i = 0; i < goals.size(); i++) {
-      auto& g = goals[i];
-      std::cout << "   [" << i << "] x=" << g.pose.position.x
-                << " y=" << g.pose.position.y
-                << " qz=" << g.pose.orientation.z
-                << " qw=" << g.pose.orientation.w << std::endl;
+    } catch (const std::exception& e) {
+      std::cerr << "\n❌ XML yükleme hatası: " << e.what() << std::endl;
+      std::cerr << "   Olası sebepler:" << std::endl;
+      std::cerr << "   - XML formatı hatalı" << std::endl;
+      std::cerr << "   - Kayıtlı olmayan node kullanılmış" << std::endl;
+      rclcpp::shutdown();
+      return 1;
     }
   } else {
-    std::cout << "\n❌ InitMissionAction BASARISIZ!" << std::endl;
-    std::cout << "   waypoints.txt dosyasi bulunamadi veya bozuk" << std::endl;
-    std::cout << "   Cozum: python3 geojson_parser.py gorev.geojson --waypoints" << std::endl;
+    // Basit test: sadece node kayıtlarını doğrula
+    std::cout << "\nXML dosyasi belirtilmedi. Node kayıt testi yapılıyor..." << std::endl;
+    std::cout << "\n✅ Kayıtlı node'lar:" << std::endl;
+
+    for (const auto& [name, manifest] : factory.manifests()) {
+      std::cout << "   [" << BT::toStr(manifest.type) << "] " << name;
+      if (!manifest.ports.empty()) {
+        std::cout << " (";
+        bool first = true;
+        for (const auto& [port_name, port_info] : manifest.ports) {
+          if (!first) std::cout << ", ";
+          std::cout << port_name;
+          first = false;
+        }
+        std::cout << ")";
+      }
+      std::cout << std::endl;
+    }
+
+    std::cout << "\nToplam: " << factory.manifests().size() << " node kayıtlı." << std::endl;
+    std::cout << "\nKullanım: ros2 run robotaxi_bt bt_test <segment_bt.xml>" << std::endl;
   }
 
   std::cout << std::endl;
   rclcpp::shutdown();
-  return (result == BT::NodeStatus::SUCCESS) ? 0 : 1;
+  return 0;
 }
