@@ -14,28 +14,19 @@ find_package(ament_cmake REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 
 include_directories(include)
 
-# ── Eski InitMissionAction kütüphanesi (geriye dönük uyumluluk) ──
-add_library(init_mission_action_node SHARED
-  src/init_mission_action.cpp
-)
 
-target_include_directories(init_mission_action_node PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
 
-ament_target_dependencies(init_mission_action_node
-  behaviortree_cpp_v3
-  rclcpp
-  geometry_msgs
-)
-
-# ── Yeni Segment BT node'ları kütüphanesi ──
+# ── Yeni Modüler BT node'ları kütüphanesi ──
 add_library(segment_bt_nodes SHARED
-  src/segment_bt_nodes.cpp
+  src/segment_loop_nodes.cpp
+  src/vehicle_control_nodes.cpp
+  src/traffic_logic_nodes.cpp
+  src/mission_utility_nodes.cpp
+  src/stub_nodes.cpp
 )
 
 target_include_directories(segment_bt_nodes PUBLIC
@@ -47,9 +38,10 @@ ament_target_dependencies(segment_bt_nodes
   behaviortree_cpp_v3
   rclcpp
   geometry_msgs
+  std_msgs
 )
 
-install(TARGETS init_mission_action_node segment_bt_nodes
+install(TARGETS segment_bt_nodes
   EXPORT export_robotaxi_bt_nodes
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -59,13 +51,13 @@ install(TARGETS init_mission_action_node segment_bt_nodes
 # ── Test executable: ros2 run robotaxi_bt bt_test ──
 add_executable(bt_test src/main.cpp)
 target_link_libraries(bt_test
-  init_mission_action_node
   segment_bt_nodes
 )
 ament_target_dependencies(bt_test
   behaviortree_cpp_v3
   rclcpp
   geometry_msgs
+  std_msgs
 )
 
 install(TARGETS bt_test
@@ -95,5 +87,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_robotaxi_bt_nodes HAS_LIBRARY_TARGET)
-ament_export_dependencies(behaviortree_cpp_v3 rclcpp geometry_msgs)
+ament_export_dependencies(behaviortree_cpp_v3 rclcpp geometry_msgs std_msgs)
 ament_package()
