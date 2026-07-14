@@ -581,3 +581,744 @@ Derleme: `colcon build --packages-select robotaxi_bt`
 - Algılama ekibi: YOLO/Lidar topic'leri
 - Harita ekibi: segment_map.yaml
 - Nav2: NavigateToPose action server
+- Nav2: NavigateToPose action server
+
+---
+
+## 12. İMPLEMENTE EDİLEN C++ KODLARININ DETAYLI MİMARİSİ VE ANALİZİ (SIFIRDAN ANLATIM)
+
+Bu bölümde, projemizde şu ana kadar C++ ile yazılmış olan tüm Behavior Tree node'larını ve destekleyici veri yapılarını teker teker, en temel seviyeden başlayarak mimari analizleriyle birlikte ele alacağız. Amacımız, sıfırdan başlayan birinin bile kodun satır satır ne yaptığını anlamasıdır.
+
+---
+
+### 12.1. ORTAK ALTYAPI: `bt_node_base.hpp`
+Behavior Tree node'larımızın ROS 2 ve loglama kütüphaneleriyle haberleşmesi için ortak bir arayüze ihtiyacı vardır. Bu ihtiyacı `bt_node_base.hpp` karşılar.
+
+```cpp
+#ifndef BT_NODE_BASE_HPP
+#define BT_NODE_BASE_HPP
+
+#include "rclcpp/rclcpp.hpp"
+#include "behaviortree_cpp_v3/action_node.h"
+#include "behaviortree_cpp_v3/condition_node.h"
+#include <string>
+
+namespace robotaxi_bt {
+
+// Ortak logger fonksiyonu
+inline rclcpp::Logger btLogger()
+{
+  return rclcpp::get_logger("segment_bt");
+}
+
+// Blackboard'dan ROS Node'a güvenli erişim sağlayan fonksiyon
+inline rclcpp::Node::SharedPtr getRosNode(const BT::NodeConfiguration& config)
+{
+  rclcpp::Node::SharedPtr node;
+  config.blackboard->get("ros_node", node);
+  if (!node) {
+    RCLCPP_ERROR(btLogger(), "Blackboard'da 'ros_node' bulunamadı! main.cpp'de set edilmeli.");
+  }
+  return node;
+}
+
+} // namespace robotaxi_bt
+#endif
+```
+
+#### Mimari Analiz ve Satır Satır Anlatım:
+1. **`btLogger()`**: ROS 2'nin standart loglama mekanizmasını (`rclcpp::get_logger`) kullanarak BT'ye özel `"segment_bt"` adında bir logger üretir. Böylece tüm loglar terminalde bu isim altında düzenlice görünür.
+2. **`getRosNode(...)`**: Behavior Tree düğümleri normalde ROS 2 düğümü değildir; sadece C++ sınıflarıdır. ROS 2 publisher/subscriber oluşturabilmeleri için `main.cpp`'de oluşturulan ana ROS node pointer'ına (`ros_node`) ihtiyaç duyarlar. Bu fonksiyon, düğümün konfigürasyonundan (Blackboard) `"ros_node"` anahtarıyla bu pointer'ı çeker.
+3. **Güvenlik Kontrolü**: `if (!node)` bloğu, eğer Blackboard'da ROS node'u tanımlanmamışsa hata basarak geliştiriciyi uyarır.
+
+---
+
+### 12.2. SEGMENT DÖNGÜSÜ NODE'LARI (`segment_loop_nodes`)
+Bu düğümler, harita üzerindeki segmentler (yol parçaları) arasında dönmeyi, şeritleri kontrol etmeyi ve segment durumlarını güncellemeyi sağlar. Harici bir sensör bağımlılığı yoktur, tamamen saf mantık içerirler.
+
+#### 1. HasMoreSegments (ConditionNode)
+* **Görevi**: Rota üzerinde gidilecek başka segment kalıp kalmadığını kontrol eder.
+* **Sınıf Yapısı (`segment_loop_nodes.hpp`)**:
+  ```cpp
+  class HasMoreSegments : public BT::ConditionNode {
+  public:
+    HasMoreSegments(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::ConditionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return {
+        BT::InputPort<int>("seg_index", "Şu anki segment indeksi"),
+        BT::InputPort<int>("route_size", "Toplam segment sayısı")
+      };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`segment_loop_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus HasMoreSegments::tick() {
+    int seg_index = 0;
+    int route_size = 0;
+    getInput("seg_index", seg_index);
+    getInput("route_size", route_size);
+
+    bool has_more = (seg_index < route_size);
+    return has_more ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - `providedPorts()` içinde iki adet `InputPort` (`seg_index` ve `route_size`) tanımlanmıştır. Bu veriler Blackboard'dan okunur.
+  - `tick()` fonksiyonunda `getInput` ile bu veriler yerel değişkenlere aktarılır.
+  - Eğer mevcut indeks, toplam segment sayısından küçükse `SUCCESS` dönerek döngünün devam etmesini sağlar. Eşit veya büyükse `FAILURE` dönerek döngüyü sonlandırır.
+
+---
+
+#### 2. IsSegmentType (ConditionNode)
+* **Görevi**: Aktif segmentin tipinin, beklenen tip (örneğin kavşak, tünel, şerit takibi) ile eşleşip eşleşmediğini kontrol eder.
+* **Sınıf Yapısı (`segment_loop_nodes.hpp`)**:
+  ```cpp
+  class IsSegmentType : public BT::ConditionNode {
+  public:
+    IsSegmentType(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::ConditionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return {
+        BT::InputPort<std::string>("seg_type", "Aktif segment tipi"),
+        BT::InputPort<std::string>("expected", "Beklenen tip (LANE_FOLLOW, INTERSECTION, ...)")
+      };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`segment_loop_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus IsSegmentType::tick() {
+    std::string seg_type, expected;
+    getInput("seg_type", seg_type);
+    getInput("expected", expected);
+
+    bool match = (seg_type == expected);
+    return match ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - XML'den gelen aktif şerit tipi (`seg_type`) ile hedeflenen tip (`expected`) `getInput` ile okunur.
+  - String karşılaştırması yapılarak durum eşleşiyorsa `SUCCESS`, eşleşmiyorsa `FAILURE` dönülür. Bu sayede Behavior Tree XML tarafında bir switch-case yapısı simüle edilir.
+
+---
+
+#### 3. IsTrafficControlActive (ConditionNode)
+* **Görevi**: Yarışma kuralları gereği Tur 1'de trafik levhaları sahada yoktur. Bu node tur numarasını kontrol ederek levha/ışık algılama mantığının çalışıp çalışmayacağını kontrol eder.
+* **Sınıf Yapısı (`segment_loop_nodes.hpp`)**:
+  ```cpp
+  class IsTrafficControlActive : public BT::ConditionNode {
+  public:
+    IsTrafficControlActive(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::ConditionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return { BT::InputPort<int>("tour", "Tur numarası (1, 2 veya 3)") };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`segment_loop_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus IsTrafficControlActive::tick() {
+    int tour = 1;
+    getInput("tour", tour);
+    bool active = (tour >= 2);
+    return active ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - `tour` parametresi okunur. Tur 2 veya Tur 3 ise trafik levha/ışık kurallarının aktif olması için `SUCCESS` dönülür. Tur 1 ise `FAILURE` dönülerek güvenlik refleksi içindeki o katmanların atlanması sağlanır.
+
+---
+
+#### 4. AdvanceSegment (SyncActionNode)
+* **Görevi**: Segment indeksini 1 artırarak bir sonraki segmentin işlenmesini sağlar.
+* **Sınıf Yapısı (`segment_loop_nodes.hpp`)**:
+  ```cpp
+  class AdvanceSegment : public BT::SyncActionNode {
+  public:
+    AdvanceSegment(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::SyncActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return { BT::BidirectionalPort<int>("seg_index", "Artırılacak segment indeksi") };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`segment_loop_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus AdvanceSegment::tick() {
+    int seg_index = 0;
+    getInput("seg_index", seg_index);
+    seg_index++;
+    setOutput("seg_index", seg_index);
+
+    RCLCPP_INFO(btLogger(), "AdvanceSegment: yeni index = %d", seg_index);
+    return BT::NodeStatus::SUCCESS;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - `BidirectionalPort` (çift yönlü port) kullanır. Bu port tipi, aynı Blackboard anahtarı üzerinden hem okuma hem yazma yetkisi tanır.
+  - Değer okunur (`getInput`), 1 artırılır ve aynı anahtara geri yazılır (`setOutput`). Düğüm anlık çalıştığı için işlem sonunda `SUCCESS` döner.
+
+---
+
+#### 5. ClearHandledFlags (SyncActionNode)
+* **Görevi**: Düğümün bir segmentten diğerine geçerken, önceki segmentte işlenmiş olan levha ve ışık bayraklarını sıfırlamasını sağlar.
+* **Sınıf Yapısı (`segment_loop_nodes.hpp`)**:
+  ```cpp
+  class ClearHandledFlags : public BT::SyncActionNode {
+  public:
+    ClearHandledFlags(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::SyncActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() { return {}; }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`segment_loop_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus ClearHandledFlags::tick() {
+    auto bb = config().blackboard;
+    bb->set("handled_stop_sign", false);
+    bb->set("handled_traffic_light", false);
+    bb->set("handled_road_sign", false);
+    bb->set("handled_pedestrian_crossing", false);
+
+    RCLCPP_DEBUG(btLogger(), "ClearHandledFlags: tüm bayraklar sıfırlandı");
+    return BT::NodeStatus::SUCCESS;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - Port tanımlaması yoktur. Doğrudan `config().blackboard` pointer'ı alınır.
+  - Blackboard üzerinden tüm engelleme/işleme bayrakları (`handled_*`) `false` değerine çekilir. Bu işlem, robotun aynı dur levhasında veya trafik ışığında kilitlenip (latch) kalmasını engeller.
+
+---
+
+### 12.3. ARAÇ KONTROL NODE'LARI (`vehicle_control_nodes`)
+Bu grup, aracın fiziksel eylemlerini tetikleyen ve ROS 2 topic'lerine mesaj yayınlayan düğümlerden oluşur.
+
+#### 6. SetMaxSpeed (SyncActionNode)
+* **Görevi**: Aracın şerit tipine göre alabileceği maksimum hız sınırını ayarlar.
+* **Sınıf Yapısı (`vehicle_control_nodes.hpp`)**:
+  ```cpp
+  class SetMaxSpeed : public BT::SyncActionNode {
+  public:
+    SetMaxSpeed(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::SyncActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return { BT::InputPort<double>("speed", "Hedef hız m/s cinsinden") };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`vehicle_control_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus SetMaxSpeed::tick() {
+    double speed = 0.0;
+    if (!getInput("speed", speed)) {
+      RCLCPP_ERROR(btLogger(), "SetMaxSpeed: 'speed' portu okunamadı!");
+      return BT::NodeStatus::FAILURE;
+    }
+
+    config().blackboard->set("current_max_speed", speed);
+
+    auto ros = getRosNode(config());
+    if (ros) {
+      auto pub = ros->create_publisher<std_msgs::msg::Float64>("/vehicle/max_speed", 10);
+      std_msgs::msg::Float64 msg;
+      msg.data = speed;
+      pub->publish(msg);
+    }
+
+    RCLCPP_INFO(btLogger(), "SetMaxSpeed: %.2f m/s ayarlandı", speed);
+    return BT::NodeStatus::SUCCESS;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - `speed` portu okunur. Hız limiti Blackboard'a `"current_max_speed"` anahtarıyla kaydedilir (diğer düğümlerin okuyabilmesi için).
+  - Ardından `getRosNode` ile alınan paylaşımlı ROS node'u kullanılarak `/vehicle/max_speed` topic'ine `std_msgs::msg::Float64` tipinde hız limiti publish edilir. Robotun hız limit kontrolü bu sayede aktifleşir.
+
+---
+
+#### 7. StopVehicle (SyncActionNode)
+* **Görevi**: Aracı acil durumda veya tabelada durdurmak için hız komutunu sıfırlar.
+* **Sınıf Yapısı (`vehicle_control_nodes.hpp`)**:
+  ```cpp
+  class StopVehicle : public BT::SyncActionNode {
+  public:
+    StopVehicle(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::SyncActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() { return {}; }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`vehicle_control_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus StopVehicle::tick() {
+    auto ros = getRosNode(config());
+    if (ros) {
+      auto pub = ros->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+      geometry_msgs::msg::Twist zero_vel;
+      pub->publish(zero_vel);
+    }
+
+    RCLCPP_INFO(btLogger(), "StopVehicle: /cmd_vel sıfırlandı");
+    return BT::NodeStatus::SUCCESS;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - ROS 2'nin standart hız topic'i olan `/cmd_vel`'e `geometry_msgs::msg::Twist` tipinde bir yayıncı oluşturulur.
+  - C++'ta `geometry_msgs::msg::Twist` nesnesi ilklendirildiğinde tüm iç değişkenleri (linear/angular x,y,z) varsayılan olarak `0.0` değerini alır. Bu boş mesaj publish edilerek robotun tekerleklerine giden güç kesilir.
+
+---
+
+#### 8. TurnHeadlights (SyncActionNode)
+* **Görevi**: Tünel girişinde farları açar, tünel çıkışında farları kapatır.
+* **Sınıf Yapısı (`vehicle_control_nodes.hpp`)**:
+  ```cpp
+  class TurnHeadlights : public BT::SyncActionNode {
+  public:
+    TurnHeadlights(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::SyncActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return { BT::InputPort<std::string>("state", "on veya off") };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`vehicle_control_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus TurnHeadlights::tick() {
+    std::string state;
+    if (!getInput("state", state)) {
+      RCLCPP_ERROR(btLogger(), "TurnHeadlights: 'state' portu okunamadı!");
+      return BT::NodeStatus::FAILURE;
+    }
+
+    bool lights_on = (state == "on" || state == "ON");
+    config().blackboard->set("headlights_on", lights_on);
+
+    auto ros = getRosNode(config());
+    if (ros) {
+      auto pub = ros->create_publisher<std_msgs::msg::Bool>("/vehicle/headlights", 10);
+      std_msgs::msg::Bool msg;
+      msg.data = lights_on;
+      pub->publish(msg);
+    }
+
+    RCLCPP_INFO(btLogger(), "TurnHeadlights: farlar %s", lights_on ? "AÇILDI" : "KAPANDI");
+    return BT::NodeStatus::SUCCESS;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - XML'den gelen `"on"` veya `"off"` string durumu okunur.
+  - Mantıksal `bool` durumuna çevrilir ve `/vehicle/headlights` topic'ine `std_msgs::msg::Bool` olarak publish edilir. Tünel kurallarına uyum sağlanmış olur.
+
+---
+
+#### 9. Dwell (StatefulActionNode)
+* **Görevi**: Yolcu duraklarında 15-20 saniye boyunca güvenli bir şekilde beklemeyi sağlar. Zaman alan bir süreç olduğu için `StatefulActionNode` olarak tasarlanmıştır.
+* **Sınıf Yapısı (`vehicle_control_nodes.hpp`)**:
+  ```cpp
+  class Dwell : public BT::StatefulActionNode {
+  public:
+    Dwell(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::StatefulActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return {
+        BT::InputPort<double>("min_sec", "Minimum bekleme süresi (saniye)"),
+        BT::InputPort<double>("max_sec", "Maksimum bekleme süresi (saniye)")
+      };
+    }
+
+    BT::NodeStatus onStart() override;
+    BT::NodeStatus onRunning() override;
+    void onHalted() override;
+
+  private:
+    std::chrono::steady_clock::time_point start_time_;
+    double wait_duration_sec_ = 15.0;
+  };
+  ```
+* **İmplementasyon (`vehicle_control_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus Dwell::onStart() {
+    double min_sec = 15.0, max_sec = 20.0;
+    getInput("min_sec", min_sec);
+    getInput("max_sec", max_sec);
+
+    wait_duration_sec_ = (min_sec + max_sec) / 2.0;
+    start_time_ = std::chrono::steady_clock::now();
+
+    RCLCPP_INFO(btLogger(), "Dwell: %.0f sn bekleme başladı (min=%.0f, max=%.0f)",
+                wait_duration_sec_, min_sec, max_sec);
+    return BT::NodeStatus::RUNNING;
+  }
+
+  BT::NodeStatus Dwell::onRunning() {
+    auto elapsed = std::chrono::steady_clock::now() - start_time_;
+    double sec = std::chrono::duration<double>(elapsed).count();
+
+    if (sec >= wait_duration_sec_) {
+      RCLCPP_INFO(btLogger(), "Dwell: %.1f sn bekleme tamamlandı", sec);
+      return BT::NodeStatus::SUCCESS;
+    }
+    return BT::NodeStatus::RUNNING;
+  }
+
+  void Dwell::onHalted() {
+    RCLCPP_WARN(btLogger(), "Dwell: HALTED — bekleme kesildi");
+  }
+  ```
+* **Satır Satır Analiz**:
+  - `onStart()` ilk tick çağrıldığında çalışır. `min_sec` ve `max_sec` okunarak ortalaması alınır ve `start_time_` kaydedilerek zamanlayıcı başlatılır. Düğümün sürdüğünü belirtmek için `RUNNING` döner.
+  - `onRunning()` sonraki tick'lerde çağrılır. Geçen süre monotonik saat (`steady_clock`) ile karşılaştırılır. Süre dolduysa `SUCCESS`, dolmadıysa `RUNNING` dönülür.
+  - `onHalted()` eğer bu bekleme sırasında bir engel algılanır ve güvenlik refleksleri bekleme işlemini durdurursa (kesinti) çalışır ve log basar.
+
+---
+
+### 12.4. TRAFİK MANTIK NODE'LARI (`traffic_logic_nodes`)
+Bu grup, trafik ışıklarının ve levhaların mantıksal kontrollerini gerçekleştirir.
+
+#### 10. IsLightRed (ConditionNode)
+* **Görevi**: Algılanan trafik ışığının kırmızı olup olmadığını test eder.
+* **Sınıf Yapısı (`traffic_logic_nodes.hpp`)**:
+  ```cpp
+  class IsLightRed : public BT::ConditionNode {
+  public:
+    IsLightRed(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::ConditionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return { BT::InputPort<std::string>("color", "Işık rengi stringi") };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`traffic_logic_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus IsLightRed::tick() {
+    std::string color;
+    getInput("color", color);
+    bool is_red = (color == "red" || color == "RED" || color == "kirmizi");
+    return is_red ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - Algılama katmanından gelen `color` portu okunur. String değeri kırmızıya eşitse `SUCCESS` (kırmızı var, dur), değilse `FAILURE` (kırmızı ışık yok) dönülür.
+
+---
+
+#### 11. IsRoadSignType (ConditionNode)
+* **Görevi**: Algılanan yol levhasının tipini doğrular.
+* **Sınıf Yapısı (`traffic_logic_nodes.hpp`)**:
+  ```cpp
+  class IsRoadSignType : public BT::ConditionNode {
+  public:
+    IsRoadSignType(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::ConditionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return {
+        BT::InputPort<std::string>("sign_type", "Algılanan levha tipi"),
+        BT::InputPort<std::string>("expected", "Beklenen tip (LANE_MERGE, NO_ENTRY, ...)")
+      };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`traffic_logic_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus IsRoadSignType::tick() {
+    std::string sign_type, expected;
+    getInput("sign_type", sign_type);
+    getInput("expected", expected);
+    bool match = (sign_type == expected);
+    return match ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - Görüntü işleme veya haritadan gelen levha tipi ile beklenen levha tipi karşılaştırılır. Doğru eşleşme durumunda `SUCCESS` dönülerek ilgili tabela aksiyonu alt ağacına geçiş sağlanır.
+
+---
+
+#### 12. StopAndProceed (SyncActionNode)
+* **Görevi**: DUR (TT-2) levhası görüldüğünde aracın durmasını ve ardından yol kontrolü yapıp devam etmesini (latch mekanizmasıyla) sağlar.
+* **Sınıf Yapısı (`traffic_logic_nodes.hpp`)**:
+  ```cpp
+  class StopAndProceed : public BT::SyncActionNode {
+  public:
+    StopAndProceed(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::SyncActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() { return {}; }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`traffic_logic_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus StopAndProceed::tick() {
+    auto bb = config().blackboard;
+    bool handled = false;
+    bb->get("handled_stop_sign", handled);
+
+    if (handled) {
+      RCLCPP_DEBUG(btLogger(), "StopAndProceed: zaten işlendi, atlanıyor");
+      return BT::NodeStatus::SUCCESS;
+    }
+
+    bb->set("handled_stop_sign", true);
+    RCLCPP_INFO(btLogger(), "StopAndProceed: DUR tabelası — duruldu, devam ediliyor");
+    return BT::NodeStatus::SUCCESS;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - Latch (kilit) bayrağı kontrol edilir. Eğer bu DUR levhası o segmentte zaten işlendiyse (`handled == true`), doğrudan `SUCCESS` dönerek aracın dur kalk kısırdöngüsüne girmesi önlenir.
+  - İlk defa görülüyorsa bayrak `true` yapılır, log basılır ve araç bir kez durduktan sonra geçişine izin verilerek `SUCCESS` dönülür.
+
+---
+
+#### 13. LogUnknownSign (SyncActionNode)
+* **Görevi**: Sınıflandırılmamış veya tanımlanamayan trafik levhalarını debug loglarına basar.
+* **Sınıf Yapısı (`traffic_logic_nodes.hpp`)**:
+  ```cpp
+  class LogUnknownSign : public BT::SyncActionNode {
+  public:
+    LogUnknownSign(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::SyncActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return { BT::InputPort<std::string>("sign_type", "Tanımsız levha tipi") };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`traffic_logic_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus LogUnknownSign::tick() {
+    std::string sign_type;
+    getInput("sign_type", sign_type);
+    RCLCPP_WARN(btLogger(), "LogUnknownSign: tanımsız levha = '%s'", sign_type.c_str());
+    return BT::NodeStatus::SUCCESS;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - XML'de `expected` listesindekilere uymayan levhalar bu fallback yaprağına düşer.
+  - Levha tipi terminale uyarı (`RCLCPP_WARN`) olarak yazdırılır ve bir sonraki adıma geçiş için `SUCCESS` dönülür.
+
+---
+
+### 12.5. GÖREV YARDIMCI NODE'LARI (`mission_utility_nodes`)
+Bu düğümler, yarışma puanı hesaplamasında kritik olan görev ve durak başarımlarını kaydeder ve ROS 2 hakem arayüzü topic'lerine veri gönderir.
+
+#### 14. RecordMissionPoint (SyncActionNode)
+* **Görevi**: Robotun bir görev noktasına (waypoint) ulaştığını teyit eder ve Blackboard'daki görev noktası sayacını günceller (+30 puan).
+* **Sınıf Yapısı (`mission_utility_nodes.hpp`)**:
+  ```cpp
+  class RecordMissionPoint : public BT::SyncActionNode {
+  public:
+    RecordMissionPoint(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::SyncActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return {
+        BT::InputPort<std::string>("point", "Görev noktası koordinatı"),
+        BT::InputPort<double>("tolerance", 1.0, "Tolerans (metre)")
+      };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`mission_utility_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus RecordMissionPoint::tick() {
+    std::string point;
+    double tolerance = 1.0;
+    getInput("point", point);
+    getInput("tolerance", tolerance);
+
+    int count = 0;
+    config().blackboard->get("mission_points_reached", count);
+    config().blackboard->set("mission_points_reached", count + 1);
+
+    RCLCPP_INFO(btLogger(), "RecordMissionPoint: nokta=%s, toplam=%d", point.c_str(), count + 1);
+    return BT::NodeStatus::SUCCESS;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - `point` (koordinat) ve `tolerance` değerleri okunur.
+  - Blackboard üzerindeki `"mission_points_reached"` sayacı 1 artırılır. İleride bu düğüm, `/odom` veya `/amcl_pose` topic'lerinden gelen anlık konum verisi ile hedef waypoint koordinatını karşılaştıracak şekilde güncellenecektir.
+
+---
+
+#### 15. RecordParkEntryReached (SyncActionNode)
+* **Görevi**: Park alanının başlangıç çizgisine ulaşıldığını Blackboard'a kaydeder (+20 puan).
+* **Sınıf Yapısı (`mission_utility_nodes.hpp`)**:
+  ```cpp
+  class RecordParkEntryReached : public BT::SyncActionNode {
+  public:
+    RecordParkEntryReached(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::SyncActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() { return {}; }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`mission_utility_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus RecordParkEntryReached::tick() {
+    config().blackboard->set("park_entry_reached", true);
+    RCLCPP_INFO(btLogger(), "RecordParkEntryReached: park girişi kaydedildi (+20)");
+    return BT::NodeStatus::SUCCESS;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - Blackboard üzerindeki `"park_entry_reached"` bayrağı `true` yapılarak park alanına giriş yapıldığı onaylanır.
+
+---
+
+#### 16. SignalPassengerEvent (SyncActionNode)
+* **Görevi**: Durakta yolcunun araca binmesi (`pickup`) veya inmesi (`dropoff`) durumlarını ROS 2 hakem sunucusuna ve ilgili düğümlere haber verir.
+* **Sınıf Yapısı (`mission_utility_nodes.hpp`)**:
+  ```cpp
+  class SignalPassengerEvent : public BT::SyncActionNode {
+  public:
+    SignalPassengerEvent(const std::string& name, const BT::NodeConfiguration& config)
+      : BT::SyncActionNode(name, config) {}
+
+    static BT::PortsList providedPorts() {
+      return { BT::InputPort<std::string>("event_type", "pickup veya dropoff") };
+    }
+    BT::NodeStatus tick() override;
+  };
+  ```
+* **İmplementasyon (`mission_utility_nodes.cpp`)**:
+  ```cpp
+  BT::NodeStatus SignalPassengerEvent::tick() {
+    std::string event_type;
+    if (!getInput("event_type", event_type)) {
+      RCLCPP_ERROR(btLogger(), "SignalPassengerEvent: 'event_type' okunamadı!");
+      return BT::NodeStatus::FAILURE;
+    }
+
+    config().blackboard->set("last_passenger_event", event_type);
+
+    auto ros = getRosNode(config());
+    if (ros) {
+      auto pub = ros->create_publisher<std_msgs::msg::String>("/mission/passenger_event", 10);
+      std_msgs::msg::String msg;
+      msg.data = event_type;
+      pub->publish(msg);
+    }
+
+    RCLCPP_INFO(btLogger(), "SignalPassengerEvent: '%s' olayı yayınlandı", event_type.c_str());
+    return BT::NodeStatus::SUCCESS;
+  }
+  ```
+* **Satır Satır Analiz**:
+  - `event_type` ("pickup" veya "dropoff") okunarak Blackboard'a `"last_passenger_event"` olarak kaydedilir.
+  - ROS 2 üzerinden `/mission/passenger_event` topic'ine `std_msgs::msg::String` veri tipinde publish edilir. Bu durum hakem arayüzü tarafından skor tablosuna yansıtılır.
+
+---
+
+### 12.6. YOL BULUCU VE HARİTA MODELİ: `segment_graph.hpp`
+Robotun yol bulma algoritmasını (Dijkstra) ve haritayı düğümler (`GraphNode`) ve yollar (`Segment`) şeklinde hafızaya almasını sağlayan C++ sınıfıdır. Harita bağımlı BT düğümlerinin (örneğin `LoadMission`, `ReplanRoute`) kalbidir.
+
+```cpp
+#ifndef SEGMENT_GRAPH_HPP
+#define SEGMENT_GRAPH_HPP
+
+#include <string>
+#include <vector>
+#include <map>
+#include <unordered_map>
+#include <queue>
+#include <limits>
+#include <fstream>
+#include <sstream>
+#include <cmath>
+
+namespace robotaxi_bt {
+
+// Graf Düğümü: Koordinatlı harita noktaları (Kavşak, durak vb.)
+struct GraphNode {
+  std::string id;
+  double x = 0.0;
+  double y = 0.0;
+};
+
+// Segment (Kenar): İki düğüm arasındaki yönlü yol parçası
+struct Segment {
+  std::string id;
+  std::string from_node;  // Başlangıç düğümü ID'si
+  std::string to_node;    // Bitiş düğümü ID'si
+  std::string type;       // LANE_FOLLOW, INTERSECTION, ROUNDABOUT, TUNNEL, etc.
+  std::string lane;       // Şerit (right/left)
+  std::string meta;       // Ek veriler (yolcu olayı vb.)
+  double cost = 1.0;      // Dijkstra ağırlığı (düğümler arası mesafe)
+
+  // Bitiş hedef yönelimi
+  double goal_x = 0.0;
+  double goal_y = 0.0;
+  double goal_yaw = 0.0;
+};
+
+// Planlanmış yol / Rota
+struct Route {
+  std::vector<Segment> segments;
+  double total_cost = 0.0;
+
+  size_t size() const { return segments.size(); }
+  bool empty() const { return segments.empty(); }
+  const Segment& at(size_t index) const { return segments.at(index); }
+};
+
+class SegmentGraph {
+public:
+  SegmentGraph() = default;
+
+  // YAML dosyasından haritayı yükler ve parseler
+  bool loadFromYAML(const std::string& filepath);
+
+  // Verilen sıralı waypoint noktaları arasında Dijkstra ile rota planlar
+  Route planRoute(const std::vector<std::string>& waypoint_node_ids) const;
+
+  // Koordinata en yakın graf düğümünü bulur
+  std::string findNearestNode(double x, double y) const;
+
+private:
+  std::unordered_map<std::string, GraphNode> nodes_;
+  std::vector<Segment> segments_;
+  std::unordered_map<std::string, std::vector<size_t>> adjacency_; // Komşuluk listesi
+
+  std::vector<Segment> dijkstra(const std::string& start, const std::string& goal) const;
+  void computeSegmentCosts();
+  // ... yardımcı parser metotları (trim, extractDouble, extractString) ...
+};
+
+} // namespace robotaxi_bt
+#endif
+```
+
+#### Mimari Analiz ve Algoritma Akışı:
+1. **Veri Yapıları**:
+   - **`GraphNode`**: Düğümlerin 2B harita üzerindeki (x,y) koordinatlarını tutar.
+   - **`Segment`**: Yönlü kenardır. Yolun tipini (tünel, kavşak vb.), şerit bilgisini ve hedef pozisyonu (`goal_yaw` dahil) saklar.
+2. **Dijkstra Algoritması (`dijkstra` metodu)**:
+   - Başlangıç düğümünden hedef düğüme giden en kısa yolu bulmak için standart bir öncelikli kuyruk (min-heap priority queue) tabanlı Dijkstra algoritması koşturur.
+   - Her segmentin maliyeti (`cost`), iki düğüm arasındaki Öklidyen koordinat mesafesi (`std::hypot`) olarak hesaplanır.
+3. **`planRoute`**:
+   - Robotun uğraması gereken görev noktaları (örneğin: `["N_START", "N_DURAK_1", "N_PARK_IN"]`) sırayla verilir.
+   - Her iki sıralı nokta çifti için Dijkstra çağrılarak alt rotalar hesaplanır ve uç uca eklenerek tam rota (`Route`) oluşturulur.
