@@ -10,9 +10,6 @@
 - `/mission/waypoints` veya GeoJSON — Yarışma durak ve rota noktaları
 
 ### verilen
-- `/vehicle/max_speed` (`std_msgs/msg/Float64`) — Hedef maksimum hız sınırı komutu
-- `/vehicle/headlights` (`std_msgs/msg/Bool`) — Far aç/kapat komutu
-- `/cmd_vel` (`geometry_msgs/msg/Twist`) — Acil durma / hız sıfırlama komutu
 
 ---
 
