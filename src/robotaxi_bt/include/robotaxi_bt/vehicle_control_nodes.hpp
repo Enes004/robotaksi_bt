@@ -43,6 +43,8 @@ public:
   }
 
   BT::NodeStatus tick() override;
+private:
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_;
 };
 
 // ─────────────────────────────────────────────
@@ -59,6 +61,8 @@ public:
   static BT::PortsList providedPorts() { return {}; }
 
   BT::NodeStatus tick() override;
+private:
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_;
 };
 
 // ─────────────────────────────────────────────
@@ -79,6 +83,8 @@ public:
   }
 
   BT::NodeStatus tick() override;
+private:
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_;
 };
 
 // ─────────────────────────────────────────────

@@ -63,13 +63,17 @@ BT::NodeStatus SignalPassengerEvent::tick()
 
   config().blackboard->set("last_passenger_event", event_type);
 
-  // ROS topic'e publish
-  auto ros = getRosNode(config());
-  if (ros) {
-    auto pub = ros->create_publisher<std_msgs::msg::String>("/mission/passenger_event", 10);
+  // Lazy-init: publisher'ı ilk tick'te oluştur
+  if (!pub_) {
+    auto ros = getRosNode(config());
+    if (ros) {
+      pub_ = ros->create_publisher<std_msgs::msg::String>("/mission/passenger_event", 10);
+    }
+  }
+  if (pub_) {
     std_msgs::msg::String msg;
     msg.data = event_type;
-    pub->publish(msg);
+    pub_->publish(msg);
   }
 
   RCLCPP_INFO(btLogger(), "SignalPassengerEvent: '%s' olayı yayınlandı", event_type.c_str());

@@ -58,6 +58,8 @@ public:
   }
 
   BT::NodeStatus tick() override;
+private:
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_;
 };
 
 }  // namespace robotaxi_bt

@@ -32,13 +32,17 @@ BT::NodeStatus SetMaxSpeed::tick()
   // Blackboard'a kaydet — diğer BT node'ları okuyabilsin
   config().blackboard->set("current_max_speed", speed);
 
-  // ROS2 topic'e publish et
-  auto ros = getRosNode(config());
-  if (ros) {
-    auto pub = ros->create_publisher<std_msgs::msg::Float64>("/vehicle/max_speed", 10);
+  // Lazy-init: publisher'ı ilk tick'te oluştur, sonrakilerde tekrar kullan
+  if (!pub_) {
+    auto ros = getRosNode(config());
+    if (ros) {
+      pub_ = ros->create_publisher<std_msgs::msg::Float64>("/vehicle/max_speed", 10);
+    }
+  }
+  if (pub_) {
     std_msgs::msg::Float64 msg;
     msg.data = speed;
-    pub->publish(msg);
+    pub_->publish(msg);
   }
 
   RCLCPP_INFO(btLogger(), "SetMaxSpeed: %.2f m/s ayarlandı", speed);
@@ -57,12 +61,17 @@ BT::NodeStatus SetMaxSpeed::tick()
 // ═══════════════════════════════════════════════════════════════
 BT::NodeStatus StopVehicle::tick()
 {
-  auto ros = getRosNode(config());
-  if (ros) {
-    auto pub = ros->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+  // Lazy-init: publisher'ı ilk tick'te oluştur
+  if (!pub_) {
+    auto ros = getRosNode(config());
+    if (ros) {
+      pub_ = ros->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+    }
+  }
+  if (pub_) {
     geometry_msgs::msg::Twist zero_vel;
     // Twist() varsayılan olarak tüm alanlar 0.0 — tam durma
-    pub->publish(zero_vel);
+    pub_->publish(zero_vel);
   }
 
   RCLCPP_INFO(btLogger(), "StopVehicle: /cmd_vel sıfırlandı");
@@ -89,13 +98,17 @@ BT::NodeStatus TurnHeadlights::tick()
   // Blackboard — diğer node'lar okuyabilir
   config().blackboard->set("headlights_on", lights_on);
 
-  // ROS2 topic
-  auto ros = getRosNode(config());
-  if (ros) {
-    auto pub = ros->create_publisher<std_msgs::msg::Bool>("/vehicle/headlights", 10);
+  // Lazy-init: publisher'ı ilk tick'te oluştur
+  if (!pub_) {
+    auto ros = getRosNode(config());
+    if (ros) {
+      pub_ = ros->create_publisher<std_msgs::msg::Bool>("/vehicle/headlights", 10);
+    }
+  }
+  if (pub_) {
     std_msgs::msg::Bool msg;
     msg.data = lights_on;
-    pub->publish(msg);
+    pub_->publish(msg);
   }
 
   RCLCPP_INFO(btLogger(), "TurnHeadlights: farlar %s", lights_on ? "AÇILDI" : "KAPANDI");
