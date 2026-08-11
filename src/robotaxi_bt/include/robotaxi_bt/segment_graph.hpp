@@ -2,13 +2,15 @@
 // Teknofest 2026 Robotaksi — Segment Graf Veri Yapısı
 //
 // Haritayı yönlü graf olarak modelleyen sınıf.
-//   - Düğümler (Node): kavşak, tünel ağzı, durak, park girişi vb.
-//   - Kenarlar (Segment): iki düğüm arasında tek yönde, tek şeritte yol parçası.
+//   - Düğümler (Node): her lanelet bir düğüm.
+//   - Kenarlar (Edge): lanelet'ler arası geçiş.
+//
+// GİRDİ: Haritacı ekibin lanelet YAML dosyası (yaml-cpp ile parse edilir).
 //
 // Kullanım:
 //   SegmentGraph graph;
-//   graph.loadFromYAML("segment_map.yaml");
-//   auto route = graph.planRoute({"N_START", "N_DURAK_1", "N_PARK_IN"});
+//   graph.loadFromYAML("harita.yaml");
+//   auto route = graph.planRoute({"4","10","16"});
 // ============================================================================
 #ifndef SEGMENT_GRAPH_HPP
 #define SEGMENT_GRAPH_HPP
@@ -19,33 +21,59 @@
 #include <unordered_map>
 #include <queue>
 #include <limits>
-#include <fstream>
-#include <sstream>
 #include <cmath>
+#include <utility>
+
+#include <yaml-cpp/yaml.h>
 
 namespace robotaxi_bt {
+
+// ─── Datum (Sıfır Nokta) ───
+// Equirectangular projeksiyonun referans noktası.
+// Lokalizasyon ekibiyle netleşince bu iki değeri değiştirin.
+constexpr double kDatumLat = 40.7897;   // derece
+constexpr double kDatumLon = 29.5090;   // derece
+
+// ─── Projeksiyon Yardımcıları ───
+
+// Enlem/Boylam'ı yerel metre düzlemine çevirir (equirectangular).
+// x = doğu yönü (lon farkı), y = kuzey yönü (lat farkı)
+inline double lonToMeters(double lon) {
+  constexpr double kMetersPerDegLon =
+      111320.0 * std::cos(kDatumLat * M_PI / 180.0);
+  return (lon - kDatumLon) * kMetersPerDegLon;
+}
+
+inline double latToMeters(double lat) {
+  constexpr double kMetersPerDegLat = 110540.0;
+  return (lat - kDatumLat) * kMetersPerDegLat;
+}
 
 // ─── Veri Yapıları ───
 
 struct GraphNode {
   std::string id;
-  double x = 0.0;
-  double y = 0.0;
+  double x = 0.0;   // metre (yerel düzlem)
+  double y = 0.0;   // metre (yerel düzlem)
 };
 
 struct Segment {
   std::string id;
-  std::string from_node;        // kaynak düğüm id
-  std::string to_node;          // hedef düğüm id
+  std::string from_node;        // kaynak düğüm id (lanelet_id string)
+  std::string to_node;          // hedef düğüm id (lanelet_id string)
   std::string type;             // LANE_FOLLOW, INTERSECTION, ROUNDABOUT, TUNNEL, PASSENGER_STOP, LANE_CHANGE, PARKING
   std::string lane;             // right / left (opsiyonel)
   std::string meta;             // ek veri: exit_node, mission id, vb.
-  double cost = 1.0;            // kenar ağırlığı (mesafe veya süre)
+  double cost = 1.0;            // kenar ağırlığı — metre cinsinden path uzunluğu
 
   // Segment bitiş hedefi (Pose2D basitleştirilmiş)
   double goal_x = 0.0;
   double goal_y = 0.0;
   double goal_yaw = 0.0;
+
+  // Şerit merkez çizgisi noktaları (yerel metre düzleminde).
+  // Nav2 FollowPath action'ına verilecek.
+  std::vector<std::pair<double, double>> path_xy;
 };
 
 // ─── Route: planlanmış segment dizisi ───
@@ -67,43 +95,143 @@ public:
   SegmentGraph() = default;
 
   // ──────────────────────────────────────────────
-  // YAML'dan graf yükleme
-  // Basitleştirilmiş YAML parser (sadece segment_map.yaml formatı)
+  // YAML'dan graf yükleme (yaml-cpp tabanlı)
+  //
+  // Beklenen format:
+  //   nodes:
+  //     - lanelet_id: 4
+  //       start: [lon, lat]
+  //       end:   [lon, lat]
+  //       path:  [[lon,lat], ...]
+  //       length: ...           # kullanılmıyor
+  //       lanelet_properties: {}
+  //   edges:
+  //     - source: 4
+  //       target: 10
+  //       cost: ...             # kullanılmıyor — kendi metre cost'unu hesaplıyoruz
   // ──────────────────────────────────────────────
   bool loadFromYAML(const std::string& filepath) {
-    std::ifstream file(filepath);
-    if (!file.is_open()) {
+    YAML::Node root;
+    try {
+      root = YAML::LoadFile(filepath);
+    } catch (const YAML::Exception&) {
       return false;
     }
 
-    std::string line;
-    std::string current_section;  // "nodes" veya "segments"
+    nodes_.clear();
+    segments_.clear();
+    adjacency_.clear();
+    lanelet_paths_.clear();
 
-    while (std::getline(file, line)) {
-      // Yorum ve boş satırları atla
-      auto trimmed = trim(line);
-      if (trimmed.empty() || trimmed[0] == '#') continue;
-
-      // Bölüm tespiti
-      if (trimmed == "nodes:") { current_section = "nodes"; continue; }
-      if (trimmed == "segments:") { current_section = "segments"; continue; }
-
-      if (current_section == "nodes") {
-        parseNodeLine(trimmed);
-      } else if (current_section == "segments") {
-        parseSegmentLine(trimmed);
-      }
+    // ── 1) NODES ──
+    if (!root["nodes"] || !root["nodes"].IsSequence()) {
+      return false;
     }
 
-    // Segment cost'larını düğüm mesafelerinden hesapla
-    computeSegmentCosts();
+    for (const auto& node_yaml : root["nodes"]) {
+      std::string lid = std::to_string(node_yaml["lanelet_id"].as<int>());
+
+      // "end" noktasını düğüm pozisyonu olarak al (segment hedefi)
+      double end_lon = node_yaml["end"][0].as<double>();
+      double end_lat = node_yaml["end"][1].as<double>();
+
+      GraphNode gn;
+      gn.id = lid;
+      gn.x = lonToMeters(end_lon);
+      gn.y = latToMeters(end_lat);
+      nodes_[lid] = gn;
+
+      // path noktalarını metre'ye çevirip sakla
+      std::vector<std::pair<double, double>> path_meters;
+      if (node_yaml["path"] && node_yaml["path"].IsSequence()) {
+        for (const auto& pt : node_yaml["path"]) {
+          double plon = pt[0].as<double>();
+          double plat = pt[1].as<double>();
+          path_meters.emplace_back(lonToMeters(plon), latToMeters(plat));
+        }
+      }
+      lanelet_paths_[lid] = std::move(path_meters);
+
+      // TODO: lanelet_properties dolunca buradan segment_type oku.
+      // Şu an haritacı ekip boş gönderiyor, dolayısıyla aşağıda
+      // varsayılan "LANE_FOLLOW" kullanılıyor.
+      // Örnek gelecek format:
+      //   lanelet_properties:
+      //     segment_type: INTERSECTION
+      //     meta: "exit_node:12"
+    }
+
+    // ── 2) EDGES ──
+    if (!root["edges"] || !root["edges"].IsSequence()) {
+      return false;
+    }
+
+    for (const auto& edge_yaml : root["edges"]) {
+      std::string src = std::to_string(edge_yaml["source"].as<int>());
+      std::string tgt = std::to_string(edge_yaml["target"].as<int>());
+
+      // Kaynak düğüm yoksa atla
+      if (nodes_.find(src) == nodes_.end() ||
+          nodes_.find(tgt) == nodes_.end()) {
+        continue;
+      }
+
+      Segment seg;
+      seg.id = src + "_" + tgt;
+      seg.from_node = src;
+      seg.to_node = tgt;
+
+      // TODO: lanelet_properties dolunca buradan segment_type oku.
+      seg.type = "LANE_FOLLOW";
+
+      // path noktalarından metre cinsinden cost hesapla
+      const auto& path = lanelet_paths_[src];
+      seg.path_xy = path;
+
+      double path_cost = 0.0;
+      for (size_t i = 1; i < path.size(); ++i) {
+        double dx = path[i].first - path[i - 1].first;
+        double dy = path[i].second - path[i - 1].second;
+        path_cost += std::hypot(dx, dy);
+      }
+
+      // Path boşsa veya tek noktaysa, düğüm arası düz mesafe kullan
+      if (path_cost <= 0.0) {
+        const auto& fn = nodes_[src];
+        const auto& tn = nodes_[tgt];
+        path_cost = std::hypot(tn.x - fn.x, tn.y - fn.y);
+      }
+      seg.cost = path_cost;
+
+      // Hedef pozisyon = hedef düğümün koordinatı (bitiş noktası)
+      seg.goal_x = nodes_[tgt].x;
+      seg.goal_y = nodes_[tgt].y;
+
+      // Yaw = son iki path noktasından hesapla; yoksa düğüm arası yön
+      if (path.size() >= 2) {
+        auto& p1 = path[path.size() - 2];
+        auto& p2 = path[path.size() - 1];
+        seg.goal_yaw = std::atan2(p2.second - p1.second,
+                                   p2.first - p1.first);
+      } else {
+        seg.goal_yaw = std::atan2(nodes_[tgt].y - nodes_[src].y,
+                                   nodes_[tgt].x - nodes_[src].x);
+      }
+
+      if (seg.cost <= 0.0) seg.cost = 1.0;
+
+      size_t idx = segments_.size();
+      segments_.push_back(std::move(seg));
+      adjacency_[src].push_back(idx);
+    }
+
     return !nodes_.empty();
   }
 
   // ──────────────────────────────────────────────
   // Rota planlama: sıralı waypoint'lerden geçen en kısa segment dizisi
   //
-  // waypoint_node_ids: ["N_START", "N_DURAK_1", "N_PARK_IN"]
+  // waypoint_node_ids: ["4", "10", "16"]
   // Her ardışık çift arasında Dijkstra çalıştırır ve birleştirir.
   // ──────────────────────────────────────────────
   Route planRoute(const std::vector<std::string>& waypoint_node_ids) const {
@@ -137,7 +265,7 @@ public:
 
   const std::vector<Segment>& allSegments() const { return segments_; }
 
-  // En yakın düğümü bul (x,y koordinatına göre)
+  // En yakın düğümü bul (x,y koordinatına göre — metre cinsinden)
   std::string findNearestNode(double x, double y) const {
     std::string nearest;
     double min_dist = std::numeric_limits<double>::max();
@@ -157,6 +285,9 @@ private:
 
   // Adjacency list: node_id → [segment_index, ...]
   std::unordered_map<std::string, std::vector<size_t>> adjacency_;
+
+  // Lanelet path noktaları (metre cinsinden) — edge cost hesabı için
+  std::unordered_map<std::string, std::vector<std::pair<double, double>>> lanelet_paths_;
 
   // ──────────────────────────────────────────────
   // Dijkstra en kısa yol
@@ -211,97 +342,6 @@ private:
     }
     std::reverse(path.begin(), path.end());
     return path;
-  }
-
-  // ──────────────────────────────────────────────
-  // Basit YAML parser yardımcıları
-  // ──────────────────────────────────────────────
-  void parseNodeLine(const std::string& line) {
-    // Format: N_START: {x: 0.0, y: 0.0}  veya  - {id: N_START, x: 0.0, y: 0.0}
-    // Basitleştirilmiş: key: {x: val, y: val}
-    auto colon = line.find(':');
-    if (colon == std::string::npos) return;
-
-    std::string id = trim(line.substr(0, colon));
-    if (id.empty() || id[0] == '-') return;
-
-    GraphNode node;
-    node.id = id;
-    node.x = extractDouble(line, "x:");
-    node.y = extractDouble(line, "y:");
-
-    nodes_[id] = node;
-  }
-
-  void parseSegmentLine(const std::string& line) {
-    // Format: - {id: S_AB, from: N_A, to: N_B, type: LANE_FOLLOW, ...}
-    if (line.find("id:") == std::string::npos) return;
-
-    Segment seg;
-    seg.id = extractString(line, "id:");
-    seg.from_node = extractString(line, "from:");
-    seg.to_node = extractString(line, "to:");
-    seg.type = extractString(line, "type:");
-    seg.lane = extractString(line, "lane:");
-    seg.meta = extractString(line, "meta:");
-
-    if (!seg.id.empty() && !seg.from_node.empty() && !seg.to_node.empty()) {
-      size_t idx = segments_.size();
-      segments_.push_back(seg);
-      adjacency_[seg.from_node].push_back(idx);
-    }
-  }
-
-  void computeSegmentCosts() {
-    for (auto& seg : segments_) {
-      auto from_it = nodes_.find(seg.from_node);
-      auto to_it = nodes_.find(seg.to_node);
-      if (from_it != nodes_.end() && to_it != nodes_.end()) {
-        seg.cost = std::hypot(to_it->second.x - from_it->second.x,
-                              to_it->second.y - from_it->second.y);
-        // Hedef pozisyon = bitiş düğümünün koordinatı
-        seg.goal_x = to_it->second.x;
-        seg.goal_y = to_it->second.y;
-        // Yaw = from→to yönü
-        seg.goal_yaw = std::atan2(to_it->second.y - from_it->second.y,
-                                   to_it->second.x - from_it->second.x);
-      }
-      if (seg.cost <= 0.0) seg.cost = 1.0;
-    }
-  }
-
-  // ──────────────────────────────────────────────
-  // String yardımcıları
-  // ──────────────────────────────────────────────
-  static std::string trim(const std::string& s) {
-    auto start = s.find_first_not_of(" \t\r\n");
-    if (start == std::string::npos) return "";
-    auto end = s.find_last_not_of(" \t\r\n");
-    return s.substr(start, end - start + 1);
-  }
-
-  static double extractDouble(const std::string& line, const std::string& key) {
-    auto pos = line.find(key);
-    if (pos == std::string::npos) return 0.0;
-    pos += key.size();
-    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) ++pos;
-    std::string num;
-    while (pos < line.size() && (std::isdigit(line[pos]) || line[pos] == '.' || line[pos] == '-')) {
-      num += line[pos++];
-    }
-    return num.empty() ? 0.0 : std::stod(num);
-  }
-
-  static std::string extractString(const std::string& line, const std::string& key) {
-    auto pos = line.find(key);
-    if (pos == std::string::npos) return "";
-    pos += key.size();
-    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) ++pos;
-    std::string val;
-    while (pos < line.size() && line[pos] != ',' && line[pos] != '}' && line[pos] != ' ') {
-      val += line[pos++];
-    }
-    return val;
   }
 };
 

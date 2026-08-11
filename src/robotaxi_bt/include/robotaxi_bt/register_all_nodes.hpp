@@ -1,3 +1,4 @@
+
 // ============================================================================
 // register_all_nodes.hpp — Tüm BT Node'larını Toplu Kayıt
 //
@@ -21,38 +22,7 @@ namespace robotaxi_bt {
 
 inline void registerAllNodes(BT::BehaviorTreeFactory& factory)
 {
-  // ── ✅ Tam İmplemente: Segment Döngüsü ──
-  factory.registerNodeType<HasMoreSegments>("HasMoreSegments");
-  factory.registerNodeType<IsSegmentType>("IsSegmentType");
-  factory.registerNodeType<IsTrafficControlActive>("IsTrafficControlActive");
-  factory.registerNodeType<AdvanceSegment>("AdvanceSegment");
-  factory.registerNodeType<ClearHandledFlags>("ClearHandledFlags");
-
-  // ── ✅ Tam İmplemente: Araç Kontrol ──
-  factory.registerNodeType<SetMaxSpeed>("SetMaxSpeed");
-  factory.registerNodeType<StopVehicle>("StopVehicle");
-  factory.registerNodeType<TurnHeadlights>("TurnHeadlights");
-  factory.registerNodeType<Dwell>("Dwell");
-
-  // ── ✅ Tam İmplemente: Trafik Mantık ──
-  factory.registerNodeType<IsLightRed>("IsLightRed");
-  factory.registerNodeType<IsRoadSignType>("IsRoadSignType");
-  factory.registerNodeType<StopAndProceed>("StopAndProceed");
-  factory.registerNodeType<LogUnknownSign>("LogUnknownSign");
-
-  // ── ✅ Tam İmplemente: Görev Yardımcı ──
-  factory.registerNodeType<RecordMissionPoint>("RecordMissionPoint");
-  factory.registerNodeType<RecordParkEntryReached>("RecordParkEntryReached");
-  factory.registerNodeType<SignalPassengerEvent>("SignalPassengerEvent");
-
-  // ── 🗺️ Stub: Harita Bağımlı ──
-  factory.registerNodeType<LoadMission>("LoadMission");
-  factory.registerNodeType<GetCurrentSegment>("GetCurrentSegment");
-  factory.registerNodeType<ReplanRoute>("ReplanRoute");
-  factory.registerNodeType<CalculateLaneChange>("CalculateLaneChange");
-  factory.registerNodeType<FindParkingSlot>("FindParkingSlot");
-
-  // ── 🔧 Stub: Sensör Bağımlı ──
+  // ── 👁️ Perception: Sensör/Algılama Bağımlı ──
   factory.registerNodeType<EmergencyStopRequested>("EmergencyStopRequested");
   factory.registerNodeType<PedestrianAhead>("PedestrianAhead");
   factory.registerNodeType<DynamicObstacleAhead>("DynamicObstacleAhead");
@@ -63,10 +33,11 @@ inline void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<StopSignAhead>("StopSignAhead");
   factory.registerNodeType<GlobalRoadSignAhead>("GlobalRoadSignAhead");
   factory.registerNodeType<TurnConflictsWithSigns>("TurnConflictsWithSigns");
-  factory.registerNodeType<CheckStopAccuracy>("CheckStopAccuracy");
-  factory.registerNodeType<IsStuck>("IsStuck");
+  factory.registerNodeType<IsLightRed>("IsLightRed");
+  factory.registerNodeType<IsRoadSignType>("IsRoadSignType");
+  factory.registerNodeType<LogUnknownSign>("LogUnknownSign");
 
-  // ── ⚡ Stub: Nav2/Hareket Bağımlı ──
+  // ── ⚡ Nav2: Hareket/Navigasyon Bağımlı ──
   factory.registerNodeType<FollowLaneSegment>("FollowLaneSegment");
   factory.registerNodeType<WaitForClear>("WaitForClear");
   factory.registerNodeType<WaitForGreenLight>("WaitForGreenLight");
@@ -77,6 +48,32 @@ inline void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<ExecuteParking>("ExecuteParking");
   factory.registerNodeType<BackUpAction>("BackUp");
   factory.registerNodeType<SpinAction>("Spin");
+  factory.registerNodeType<ReplanRoute>("ReplanRoute");
+  factory.registerNodeType<CalculateLaneChange>("CalculateLaneChange");
+
+  // ── 🚗 Control: Araç Kontrol/Aktüasyon ──
+  factory.registerNodeType<SetMaxSpeed>("SetMaxSpeed");
+  factory.registerNodeType<StopVehicle>("StopVehicle");
+  factory.registerNodeType<TurnHeadlights>("TurnHeadlights");
+  factory.registerNodeType<Dwell>("Dwell");
+  factory.registerNodeType<StopAndProceed>("StopAndProceed");
+
+  // ── 📍 Localization: Konum/Segment/Harita Takibi ──
+  factory.registerNodeType<HasMoreSegments>("HasMoreSegments");
+  factory.registerNodeType<IsSegmentType>("IsSegmentType");
+  factory.registerNodeType<IsTrafficControlActive>("IsTrafficControlActive");
+  factory.registerNodeType<AdvanceSegment>("AdvanceSegment");
+  factory.registerNodeType<ClearHandledFlags>("ClearHandledFlags");
+  factory.registerNodeType<LoadMission>("LoadMission");
+  factory.registerNodeType<GetCurrentSegment>("GetCurrentSegment");
+  factory.registerNodeType<FindParkingSlot>("FindParkingSlot");
+  factory.registerNodeType<CheckStopAccuracy>("CheckStopAccuracy");
+  factory.registerNodeType<IsStuck>("IsStuck");
+
+  // ── 🎯 Görev Yardımcı (Perception/Nav2/Control/Localization dışı) ──
+  factory.registerNodeType<RecordMissionPoint>("RecordMissionPoint");
+  factory.registerNodeType<RecordParkEntryReached>("RecordParkEntryReached");
+  factory.registerNodeType<SignalPassengerEvent>("SignalPassengerEvent");
 }
 
 }  // namespace robotaxi_bt

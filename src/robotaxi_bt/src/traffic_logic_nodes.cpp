@@ -18,15 +18,14 @@ namespace robotaxi_bt {
 //   Kırmızı değilse → Inverter → SUCCESS → devam et
 //   Kırmızı ise → dur ve bekle
 // ═══════════════════════════════════════════════════════════════
-BT::NodeStatus IsLightRed::tick()
-{
+BT::NodeStatus IsLightRed::tick() {
   std::string color;
   getInput("color", color);
 
   bool is_red = (color == "red" || color == "RED" || color == "kirmizi");
 
-  RCLCPP_DEBUG(btLogger(), "IsLightRed: color='%s' → %s",
-               color.c_str(), is_red ? "KIRMIZI" : "DEĞİL");
+  RCLCPP_DEBUG(btLogger(), "IsLightRed: color='%s' → %s", color.c_str(),
+               is_red ? "KIRMIZI" : "DEĞİL");
 
   return is_red ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
@@ -42,8 +41,7 @@ BT::NodeStatus IsLightRed::tick()
 //
 // Geçerli tipler: LANE_MERGE, PEDESTRIAN_CROSS, PASS_DIRECTION, NO_ENTRY
 // ═══════════════════════════════════════════════════════════════
-BT::NodeStatus IsRoadSignType::tick()
-{
+BT::NodeStatus IsRoadSignType::tick() {
   std::string sign_type, expected;
   getInput("sign_type", sign_type);
   getInput("expected", expected);
@@ -69,8 +67,7 @@ BT::NodeStatus IsRoadSignType::tick()
 //
 // ClearHandledFlags sonraki segmentte bayrağı sıfırlar.
 // ═══════════════════════════════════════════════════════════════
-BT::NodeStatus StopAndProceed::tick()
-{
+BT::NodeStatus StopAndProceed::tick() {
   auto bb = config().blackboard;
 
   // Latch kontrolü
@@ -84,7 +81,8 @@ BT::NodeStatus StopAndProceed::tick()
   // Bayrağı set et
   bb->set("handled_stop_sign", true);
 
-  RCLCPP_INFO(btLogger(), "StopAndProceed: DUR tabelası — duruldu, devam ediliyor");
+  RCLCPP_INFO(btLogger(),
+              "StopAndProceed: DUR tabelası — duruldu, devam ediliyor");
   return BT::NodeStatus::SUCCESS;
 }
 
@@ -96,13 +94,15 @@ BT::NodeStatus StopAndProceed::tick()
 // ForceSuccess ile sarılmadığı halde Fallback'in son çocuğu
 // olduğu için SUCCESS dönmesi Fallback'i tamamlar.
 // ═══════════════════════════════════════════════════════════════
-BT::NodeStatus LogUnknownSign::tick()
-{
+BT::NodeStatus LogUnknownSign::tick() {
   std::string sign_type;
   getInput("sign_type", sign_type);
 
-  RCLCPP_WARN(btLogger(), "LogUnknownSign: tanımsız levha = '%s'", sign_type.c_str());
+  RCLCPP_WARN(btLogger(), "LogUnknownSign: tanımsız levha = '%s'",
+              sign_type.c_str());
   return BT::NodeStatus::SUCCESS;
 }
 
-}  // namespace robotaxi_bt
+} // namespace robotaxi_bt
+
+,

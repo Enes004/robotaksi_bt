@@ -8,7 +8,7 @@
 //   - Dwell           : belirli süre bekle (StatefulAction)
 //
 // BAĞIMLILIK: std_msgs (ROS2 publisher için)
-// DURUM: ✅ Tam implemente — ROS topic publish ile gerçek çalışır.
+// DURUM: ✅ Tam implemente — ROS topic publish ile gerçek çalışırfi
 //
 // BT.CPP v3 uyumlu.
 // ============================================================================

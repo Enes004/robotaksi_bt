@@ -15,6 +15,7 @@ find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 include_directories(include)
 
@@ -40,6 +41,7 @@ ament_target_dependencies(segment_bt_nodes
   geometry_msgs
   std_msgs
 )
+target_link_libraries(segment_bt_nodes yaml-cpp)
 
 install(TARGETS segment_bt_nodes
   EXPORT export_robotaxi_bt_nodes
