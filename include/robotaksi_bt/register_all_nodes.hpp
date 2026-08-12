@@ -4,7 +4,7 @@
 //
 // Kullanım:
 //   BT::BehaviorTreeFactory factory;
-//   robotaxi_bt::registerAllNodes(factory);
+//   robotaksi_bt::registerAllNodes(factory);
 // ============================================================================
 #ifndef REGISTER_ALL_NODES_HPP
 #define REGISTER_ALL_NODES_HPP
@@ -12,13 +12,13 @@
 #include "behaviortree_cpp_v3/bt_factory.h"
 
 // Modüler node grupları
-#include "robotaxi_bt/segment_loop_nodes.hpp"
-#include "robotaxi_bt/vehicle_control_nodes.hpp"
-#include "robotaxi_bt/traffic_logic_nodes.hpp"
-#include "robotaxi_bt/mission_utility_nodes.hpp"
-#include "robotaxi_bt/stub_nodes.hpp"
+#include "robotaksi_bt/segment_loop_nodes.hpp"
+#include "robotaksi_bt/vehicle_control_nodes.hpp"
+#include "robotaksi_bt/traffic_logic_nodes.hpp"
+#include "robotaksi_bt/mission_utility_nodes.hpp"
+#include "robotaksi_bt/stub_nodes.hpp"
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 inline void registerAllNodes(BT::BehaviorTreeFactory& factory)
 {
@@ -76,6 +76,6 @@ inline void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<SignalPassengerEvent>("SignalPassengerEvent");
 }
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt
 
 #endif  // REGISTER_ALL_NODES_HPP

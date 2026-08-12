@@ -2,8 +2,8 @@
 // BT Runner — Segment BT'yi sürekli döngüde çalıştırır
 //
 // Kullanım:
-//   ros2 run robotaxi_bt bt_test
-//   ros2 run robotaxi_bt bt_test /tam/yol/segment_bt.xml
+//   ros2 run robotaksi_bt bt_test
+//   ros2 run robotaksi_bt bt_test /tam/yol/segment_bt.xml
 //
 // Döngü: 20 Hz — her iterasyonda:
 //   1. rclcpp::spin_some() → ROS callback'lerini işle
@@ -13,7 +13,7 @@
 // BT.CPP v3 uyumlu.
 // ============================================================================
 
-#include "robotaxi_bt/register_all_nodes.hpp"
+#include "robotaksi_bt/register_all_nodes.hpp"
 #include "behaviortree_cpp_v3/bt_factory.h"
 #include "rclcpp/rclcpp.hpp"
 #include <iostream>
@@ -33,7 +33,7 @@ int main(int argc, char **argv)
   BT::BehaviorTreeFactory factory;
 
   // Yeni modüler node kayıtları
-  robotaxi_bt::registerAllNodes(factory);
+  robotaksi_bt::registerAllNodes(factory);
 
   // Komut satırından XML dosya yolu (opsiyonel)
   std::string xml_file;
@@ -98,7 +98,7 @@ int main(int argc, char **argv)
     }
 
     std::cout << "\nToplam: " << factory.manifests().size() << " node kayıtlı." << std::endl;
-    std::cout << "\nKullanım: ros2 run robotaxi_bt bt_test <segment_bt.xml>" << std::endl;
+    std::cout << "\nKullanım: ros2 run robotaksi_bt bt_test <segment_bt.xml>" << std::endl;
   }
 
   std::cout << std::endl;

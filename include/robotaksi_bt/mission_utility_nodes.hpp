@@ -11,12 +11,12 @@
 #ifndef MISSION_UTILITY_NODES_HPP
 #define MISSION_UTILITY_NODES_HPP
 
-#include "robotaxi_bt/bt_node_base.hpp"
+#include "robotaksi_bt/bt_node_base.hpp"
 #include "behaviortree_cpp_v3/action_node.h"
 #include "std_msgs/msg/string.hpp"
 #include <string>
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 // ─── RecordMissionPoint (SyncAction) ───
 class RecordMissionPoint : public BT::SyncActionNode {
@@ -62,6 +62,6 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_;
 };
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt
 
 #endif  // MISSION_UTILITY_NODES_HPP

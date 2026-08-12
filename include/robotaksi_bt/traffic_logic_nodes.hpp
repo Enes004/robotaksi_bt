@@ -16,12 +16,12 @@
 #ifndef TRAFFIC_LOGIC_NODES_HPP
 #define TRAFFIC_LOGIC_NODES_HPP
 
-#include "robotaxi_bt/bt_node_base.hpp"
+#include "robotaksi_bt/bt_node_base.hpp"
 #include "behaviortree_cpp_v3/action_node.h"
 #include "behaviortree_cpp_v3/condition_node.h"
 #include <string>
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 // ─── IsLightRed (Condition) ───
 class IsLightRed : public BT::ConditionNode {
@@ -76,6 +76,6 @@ public:
   BT::NodeStatus tick() override;
 };
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt
 
 #endif  // TRAFFIC_LOGIC_NODES_HPP

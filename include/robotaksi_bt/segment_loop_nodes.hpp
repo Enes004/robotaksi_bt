@@ -16,12 +16,12 @@
 #ifndef SEGMENT_LOOP_NODES_HPP
 #define SEGMENT_LOOP_NODES_HPP
 
-#include "robotaxi_bt/bt_node_base.hpp"
+#include "robotaksi_bt/bt_node_base.hpp"
 #include "behaviortree_cpp_v3/action_node.h"
 #include "behaviortree_cpp_v3/condition_node.h"
 #include <string>
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 // ─────────────────────────────────────────────
 // HasMoreSegments (Condition)
@@ -148,6 +148,6 @@ public:
   BT::NodeStatus tick() override;
 };
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt
 
 #endif  // SEGMENT_LOOP_NODES_HPP

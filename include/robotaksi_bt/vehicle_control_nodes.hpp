@@ -15,7 +15,7 @@
 #ifndef VEHICLE_CONTROL_NODES_HPP
 #define VEHICLE_CONTROL_NODES_HPP
 
-#include "robotaxi_bt/bt_node_base.hpp"
+#include "robotaksi_bt/bt_node_base.hpp"
 #include "behaviortree_cpp_v3/action_node.h"
 #include "geometry_msgs/msg/twist.hpp"
 #include "std_msgs/msg/float64.hpp"
@@ -23,7 +23,7 @@
 #include <string>
 #include <chrono>
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 // ─────────────────────────────────────────────
 // SetMaxSpeed (SyncAction)
@@ -120,6 +120,6 @@ private:
   double wait_duration_sec_ = 15.0;
 };
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt
 
 #endif  // VEHICLE_CONTROL_NODES_HPP

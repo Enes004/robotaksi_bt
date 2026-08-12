@@ -5,9 +5,9 @@
 // Her birinin TODO yorumu gerçek implementasyon için rehberdir.
 // ============================================================================
 
-#include "robotaxi_bt/stub_nodes.hpp"
+#include "robotaksi_bt/stub_nodes.hpp"
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 // ═══════════════ 🗺️ HARİTA BAĞIMLI STUB'LAR ═══════════════
 
@@ -17,6 +17,28 @@ BT::NodeStatus LoadMission::tick()
   getInput("geojson_file", geojson_file);
   getInput("tour", tour);
   RCLCPP_WARN(btLogger(), "LoadMission: STUB — geojson=%s, tur=%d", geojson_file.c_str(), tour);
+
+  // Segment graf'ı yalnızca ilk tick'te yükle — her tick'te dosyaları
+  // yeniden parse etmek gereksiz I/O'ya yol açar.
+  if (!graph_loaded_) {
+    // TODO: gerçek dosya yollarını gir (harita ekibinden gelen dosyalar)
+    const std::string routing_graph_yaml = "TODO: routing_graph.yaml yolu";
+    const std::string lanelet_layer_geojson = "TODO: lanelet_layer.geojson yolu";
+
+    if (!graph_.loadFromYAML(routing_graph_yaml)) {
+      RCLCPP_ERROR(btLogger(), "LoadMission: routing_graph.yaml yüklenemedi: %s",
+                   routing_graph_yaml.c_str());
+    } else {
+      // loadFromYAML'dan SONRA ayrıca çağrılmalı — iki dosya harita
+      // ekibinden ayrı zamanlarda gelir (bkz. segment_graph.hpp).
+      if (!graph_.loadTypesFromGeoJSON(lanelet_layer_geojson)) {
+        RCLCPP_WARN(btLogger(), "LoadMission: lanelet_layer.geojson yüklenemedi: %s",
+                    lanelet_layer_geojson.c_str());
+      }
+      graph_loaded_ = true;
+    }
+  }
+
   // TODO: 1) GeoJSON oku  2) segment_map.yaml yükle  3) Dijkstra rota planla
   setOutput("route", std::string("[]"));
   setOutput("route_size", 0);
@@ -258,4 +280,4 @@ BT::NodeStatus SpinAction::tick()
   return BT::NodeStatus::SUCCESS;
 }
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(robotaxi_bt)
+project(robotaksi_bt)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -16,6 +16,7 @@ find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 include_directories(include)
 
@@ -41,16 +42,16 @@ ament_target_dependencies(segment_bt_nodes
   geometry_msgs
   std_msgs
 )
-target_link_libraries(segment_bt_nodes yaml-cpp)
+target_link_libraries(segment_bt_nodes yaml-cpp nlohmann_json::nlohmann_json)
 
 install(TARGETS segment_bt_nodes
-  EXPORT export_robotaxi_bt_nodes
+  EXPORT export_robotaksi_bt_nodes
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
 
-# ── Test executable: ros2 run robotaxi_bt bt_test ──
+# ── Test executable: ros2 run robotaksi_bt bt_test ──
 add_executable(bt_test src/main.cpp)
 target_link_libraries(bt_test
   segment_bt_nodes
@@ -88,6 +89,6 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-ament_export_targets(export_robotaxi_bt_nodes HAS_LIBRARY_TARGET)
-ament_export_dependencies(behaviortree_cpp_v3 rclcpp geometry_msgs std_msgs)
+ament_export_targets(export_robotaksi_bt_nodes HAS_LIBRARY_TARGET)
+ament_export_dependencies(behaviortree_cpp_v3 rclcpp geometry_msgs std_msgs nlohmann_json)
 ament_package()

@@ -23,10 +23,14 @@
 #include <limits>
 #include <cmath>
 #include <utility>
+#include <fstream>
+#include <algorithm>
+#include <cctype>
 
 #include <yaml-cpp/yaml.h>
+#include <nlohmann/json.hpp>
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 // ─── Datum (Sıfır Nokta) ───
 // Equirectangular projeksiyonun referans noktası.
@@ -229,6 +233,79 @@ public:
   }
 
   // ──────────────────────────────────────────────
+  // GeoJSON'dan segment tiplerini yükleme (nlohmann::json tabanlı)
+  //
+  // ÖNEMLİ: Bu fonksiyon loadFromYAML(...)'dan SONRA, çağıran kod
+  // (örn. BT node) tarafından AYRICA çağrılmalıdır — loadFromYAML
+  // içine gömülü değildir. Sebep: harita ekibi geometriyi
+  // (routing_graph.yaml) ve lanelet tiplerini (lanelet_layer.geojson)
+  // AYRI dosyalar halinde, AYRI zamanlarda/sürümlerde gönderiyor; biri
+  // güncellenirken diğeri sabit kalabiliyor. İki yükleme adımını ayrı
+  // tutmak, tipler güncellendiğinde geometriyi (veya tam tersini)
+  // yeniden parse etmeden sadece ilgili fonksiyonu çağırmayı mümkün
+  // kılıyor.
+  //
+  // Beklenen format:
+  //   { "features": [
+  //       { "properties": { "lanelet_id": 224, "lanelet_type": "passenger_stop" }, ... },
+  //       ...
+  //   ]}
+  //
+  // lanelet_type küçük harf gelir (örn. "passenger_stop"); Segment::type
+  // BÜYÜK HARF bekler (örn. "PASSENGER_STOP", bkz. BT XML'deki
+  // IsSegmentType expected="..." karşılaştırması) — burada çevrilir.
+  //
+  // Not: Segment::type, o segmentin kaynağı olan lanelet'in (from_node)
+  // tipini yansıtır (loadFromYAML içinde segment geometrisi de kaynak
+  // lanelet'in path'inden alınıyor — bkz. lanelet_paths_[src]). Bu
+  // yüzden eşleştirme lanelet_id → adjacency_[lanelet_id] (o düğümden
+  // çıkan segmentler) üzerinden yapılır.
+  //
+  // Dosyada eşleşmeyen (geometri var ama tip dosyasında olmayan)
+  // lanelet'ler mevcut değerini (loadFromYAML'daki varsayılan
+  // "LANE_FOLLOW") korur — hata verilmez.
+  // ──────────────────────────────────────────────
+  bool loadTypesFromGeoJSON(const std::string& filepath) {
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+      return false;
+    }
+
+    nlohmann::json root;
+    try {
+      file >> root;
+    } catch (const nlohmann::json::exception&) {
+      return false;
+    }
+
+    if (!root.contains("features") || !root["features"].is_array()) {
+      return false;
+    }
+
+    for (const auto& feature : root["features"]) {
+      if (!feature.contains("properties")) continue;
+      const auto& props = feature["properties"];
+      if (!props.contains("lanelet_id") || !props.contains("lanelet_type")) continue;
+      if (props["lanelet_id"].is_null() || props["lanelet_type"].is_null()) continue;
+
+      std::string lanelet_id = std::to_string(props["lanelet_id"].get<int>());
+      std::string type_upper = props["lanelet_type"].get<std::string>();
+      std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(),
+                     [](unsigned char c) { return std::toupper(c); });
+
+      // lanelet_id, o lanelet'ten çıkan segment(ler)in from_node'una karşılık gelir.
+      auto adj_it = adjacency_.find(lanelet_id);
+      if (adj_it == adjacency_.end()) continue;  // bu lanelet için geometri yok — sessizce atla
+
+      for (size_t seg_idx : adj_it->second) {
+        segments_[seg_idx].type = type_upper;
+      }
+    }
+
+    return true;
+  }
+
+  // ──────────────────────────────────────────────
   // Rota planlama: sıralı waypoint'lerden geçen en kısa segment dizisi
   //
   // waypoint_node_ids: ["4", "10", "16"]
@@ -345,6 +422,6 @@ private:
   }
 };
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt
 
 #endif  // SEGMENT_GRAPH_HPP

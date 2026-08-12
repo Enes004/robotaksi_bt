@@ -16,14 +16,14 @@
 #ifndef STUB_NODES_HPP
 #define STUB_NODES_HPP
 
-#include "robotaxi_bt/bt_node_base.hpp"
+#include "robotaksi_bt/bt_node_base.hpp"
 #include "behaviortree_cpp_v3/action_node.h"
 #include "behaviortree_cpp_v3/condition_node.h"
-#include "robotaxi_bt/segment_graph.hpp"
+#include "robotaksi_bt/segment_graph.hpp"
 #include <string>
 #include <chrono>
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 // ═══════════════ 🗺️ HARİTA BAĞIMLI ═══════════════
 
@@ -40,6 +40,7 @@ public:
   BT::NodeStatus tick() override;
 private:
   SegmentGraph graph_;
+  bool graph_loaded_ = false;  // dosyalar sadece ilk tick'te yüklensin
 };
 
 class GetCurrentSegment : public BT::SyncActionNode {
@@ -286,6 +287,6 @@ public:
   BT::NodeStatus tick() override;
 };
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt
 
 #endif  // STUB_NODES_HPP

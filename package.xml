@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>robotaxi_bt</name>
+  <name>robotaksi_bt</name>
   <version>0.0.0</version>
   <description>Robotaxi Behaviour Tree package</description>
   <maintainer email="enessatici20@gmail.com">enes</maintainer>
@@ -14,6 +14,7 @@
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>yaml_cpp_vendor</depend>
+  <depend>nlohmann-json-dev</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

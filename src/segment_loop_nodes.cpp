@@ -4,9 +4,9 @@
 // Bu dosyadaki TÜM node'lar tam implemente — harici bağımlılık YOK.
 // ============================================================================
 
-#include "robotaxi_bt/segment_loop_nodes.hpp"
+#include "robotaksi_bt/segment_loop_nodes.hpp"
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 // ═══════════════════════════════════════════════════════════════
 // HasMoreSegments::tick()
@@ -205,4 +205,4 @@ BT::NodeStatus ClearHandledFlags::tick()
   return BT::NodeStatus::SUCCESS;
 }
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt

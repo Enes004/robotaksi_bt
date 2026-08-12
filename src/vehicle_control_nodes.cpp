@@ -4,9 +4,9 @@
 // ✅ Tam implemente — ROS2 publisher ile gerçek topic'lere yayın yapar.
 // ============================================================================
 
-#include "robotaxi_bt/vehicle_control_nodes.hpp"
+#include "robotaksi_bt/vehicle_control_nodes.hpp"
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 // ═══════════════════════════════════════════════════════════════
 // SetMaxSpeed::tick()
@@ -165,4 +165,4 @@ void Dwell::onHalted()
   RCLCPP_WARN(btLogger(), "Dwell: HALTED — bekleme kesildi");
 }
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt

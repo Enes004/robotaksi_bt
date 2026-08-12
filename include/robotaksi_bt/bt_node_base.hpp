@@ -22,7 +22,7 @@
 #include "behaviortree_cpp_v3/condition_node.h"
 #include <string>
 
-namespace robotaxi_bt {
+namespace robotaksi_bt {
 
 // ─── Ortak logger fonksiyonu ───
 // Tüm node'lar bu fonksiyonla log basar.
@@ -50,6 +50,6 @@ inline rclcpp::Node::SharedPtr getRosNode(const BT::NodeConfiguration& config)
   return node;
 }
 
-}  // namespace robotaxi_bt
+}  // namespace robotaksi_bt
 
 #endif  // BT_NODE_BASE_HPP
