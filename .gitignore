@@ -7,3 +7,4 @@ log/
 *.os
 *.pyc
 __pycache__/
+src/robotaksi_localization/
