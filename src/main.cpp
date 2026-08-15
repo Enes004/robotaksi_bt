@@ -14,6 +14,7 @@
 // ============================================================================
 
 #include "robotaksi_bt/register_all_nodes.hpp"
+#include "robotaksi_bt/bt_node_base.hpp"
 #include "behaviortree_cpp_v3/bt_factory.h"
 #include "rclcpp/rclcpp.hpp"
 #include <iostream>
@@ -26,6 +27,15 @@ int main(int argc, char **argv)
   // ROS2 node oluştur — BT node'ları bu shared_ptr üzerinden
   // publisher/subscriber oluşturabilir (Blackboard'a eklenir)
   auto ros_node = rclcpp::Node::make_shared("bt_test_node");
+
+  // ── ROS Parametreleri ──
+  // Blackboard'a yazılacak değerler. Komut satırından veya launch dosyasından:
+  //   --ros-args -p tour:=2 -p mission_json:=/path/to/gorev.geojson
+  ros_node->declare_parameter<int>("tour", 1);
+  ros_node->declare_parameter<std::string>("mission_json", "");
+
+  // Odometry provider'ı başlat — tüm BT node'ları erişebilir
+  robotaksi_bt::OdometryProvider::instance().init(ros_node);
 
   std::cout << "\n=== Segment BT Runner ===" << std::endl;
 
@@ -47,8 +57,24 @@ int main(int argc, char **argv)
     try {
       auto tree = factory.createTreeFromFile(xml_file);
 
+      // Kök blackboard'u global singleton'a kaydet — SubTree sınırlarını
+      // aşan node'lar (autoremap koptuğunda) buradan erişir.
+      robotaksi_bt::globalRootBlackboard() = tree.rootBlackboard();
+
       // ROS node'u Blackboard'a ekle — tüm BT node'ları erişebilir
       tree.rootBlackboard()->set("ros_node", ros_node);
+
+      // Misyon parametrelerini Blackboard'a yaz — XML'deki {tour} ve
+      // {geojson_file} anahtarları bu değerleri okur.
+      int tour_val = ros_node->get_parameter("tour").as_int();
+      std::string mission_json_val = ros_node->get_parameter("mission_json").as_string();
+      tree.rootBlackboard()->set("tour", tour_val);
+      tree.rootBlackboard()->set("geojson_file", mission_json_val);
+
+      RCLCPP_INFO(ros_node->get_logger(),
+        "Tour: %d, Mission JSON: %s",
+        tour_val,
+        mission_json_val.empty() ? "(belirtilmedi)" : mission_json_val.c_str());
 
       std::cout << "\n✅ XML başarıyla yüklendi!" << std::endl;
       std::cout << "   Kayıtlı node sayısı: " << factory.manifests().size() << std::endl;

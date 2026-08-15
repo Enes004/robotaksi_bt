@@ -181,6 +181,9 @@ public:
   IsStuck(const std::string& n, const BT::NodeConfiguration& c) : BT::ConditionNode(n,c) {}
   static BT::PortsList providedPorts() { return {}; }
   BT::NodeStatus tick() override;
+private:
+  bool stuck_active_ = false;
+  std::chrono::steady_clock::time_point stuck_since_;
 };
 
 // ═══════════════ ⚡ NAV2 / HAREKET BAĞIMLI ═══════════════

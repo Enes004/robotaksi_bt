@@ -6,6 +6,8 @@
 // ============================================================================
 
 #include "robotaksi_bt/stub_nodes.hpp"
+#include <sstream>
+#include <cmath>
 
 namespace robotaksi_bt {
 
@@ -13,47 +15,70 @@ namespace robotaksi_bt {
 
 BT::NodeStatus LoadMission::tick()
 {
-  std::string geojson_file; int tour = 1;
-  getInput("geojson_file", geojson_file);
-  getInput("tour", tour);
-  RCLCPP_WARN(btLogger(), "LoadMission: STUB — geojson=%s, tur=%d", geojson_file.c_str(), tour);
-
-  // Segment graf'ı yalnızca ilk tick'te yükle — her tick'te dosyaları
-  // yeniden parse etmek gereksiz I/O'ya yol açar.
   if (!graph_loaded_) {
-    // TODO: gerçek dosya yollarını gir (harita ekibinden gelen dosyalar)
-    const std::string routing_graph_yaml = "TODO: routing_graph.yaml yolu";
-    const std::string lanelet_layer_geojson = "TODO: lanelet_layer.geojson yolu";
+    const std::string yaml_file = "config/harita.yaml";
+    const std::string geojson_file = "config/lanelet_layer.geojson";
 
-    if (!graph_.loadFromYAML(routing_graph_yaml)) {
-      RCLCPP_ERROR(btLogger(), "LoadMission: routing_graph.yaml yüklenemedi: %s",
-                   routing_graph_yaml.c_str());
-    } else {
-      // loadFromYAML'dan SONRA ayrıca çağrılmalı — iki dosya harita
-      // ekibinden ayrı zamanlarda gelir (bkz. segment_graph.hpp).
-      if (!graph_.loadTypesFromGeoJSON(lanelet_layer_geojson)) {
-        RCLCPP_WARN(btLogger(), "LoadMission: lanelet_layer.geojson yüklenemedi: %s",
-                    lanelet_layer_geojson.c_str());
-      }
-      graph_loaded_ = true;
+    if (!graph_.loadFromYAML(yaml_file)) {
+      RCLCPP_ERROR(btLogger(), "LoadMission: Harita YAML yüklenemedi: %s", yaml_file.c_str());
+      return BT::NodeStatus::FAILURE;
     }
+
+    if (!graph_.loadTypesFromGeoJSON(geojson_file)) {
+      RCLCPP_WARN(btLogger(), "LoadMission: Lanelet GeoJSON yüklenemedi: %s", geojson_file.c_str());
+    }
+
+    graph_loaded_ = true;
   }
 
-  // TODO: 1) GeoJSON oku  2) segment_map.yaml yükle  3) Dijkstra rota planla
-  setOutput("route", std::string("[]"));
-  setOutput("route_size", 0);
-  setOutput("seg_index", 0);
+  // TODO: mission_json'dan waypoint okuma henüz yapılmadı
+  auto route = graph_.planRoute({"4", "10", "16"});
+  if (route.empty()) {
+    RCLCPP_ERROR(btLogger(), "LoadMission: Rota planlama başarısız veya rota boş!");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  auto route_ptr = std::make_shared<Route>(route);
+  // Kök blackboard'a doğrudan yaz — SubTree autoremap sınırını aşar
+  globalRootBlackboard()->set("route_obj", route_ptr);
+  globalRootBlackboard()->set("route_size", static_cast<int>(route.size()));
+  globalRootBlackboard()->set("seg_index", 0);
+
   return BT::NodeStatus::SUCCESS;
 }
 
 BT::NodeStatus GetCurrentSegment::tick()
 {
-  int seg_index = 0; getInput("seg_index", seg_index);
-  RCLCPP_INFO(btLogger(), "GetCurrentSegment: STUB index=%d", seg_index);
-  // TODO: route JSON parse et, seg_index'teki segmenti çöz
-  setOutput("seg_type", std::string("LANE_FOLLOW"));
-  setOutput("seg_goal", std::string("0.0;0.0;0.0"));
-  setOutput("seg_meta", std::string(""));
+  // Kök blackboard'dan oku — SubTree autoremap sınırını aşar
+  std::shared_ptr<Route> route_ptr;
+  if (!globalRootBlackboard()->get("route_obj", route_ptr) || !route_ptr) {
+    RCLCPP_ERROR(btLogger(), "GetCurrentSegment: Blackboard'da 'route_obj' bulunamadı veya null!");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  int seg_index = 0;
+  if (!globalRootBlackboard()->get("seg_index", seg_index)) {
+    RCLCPP_ERROR(btLogger(), "GetCurrentSegment: 'seg_index' okunamadı!");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  if (seg_index < 0 || static_cast<size_t>(seg_index) >= route_ptr->size()) {
+    RCLCPP_ERROR(btLogger(), "GetCurrentSegment: seg_index (%d) sınır dışında! (route_size: %zu)",
+                 seg_index, route_ptr->size());
+    return BT::NodeStatus::FAILURE;
+  }
+
+  const Segment& segment = route_ptr->at(static_cast<size_t>(seg_index));
+
+  // Kök blackboard'a yaz — SubTree autoremap sınırını aşar
+  globalRootBlackboard()->set("seg_type", segment.type);
+
+  std::ostringstream oss;
+  oss << segment.goal_x << ";" << segment.goal_y << ";" << segment.goal_yaw;
+  globalRootBlackboard()->set("seg_goal", oss.str());
+
+  globalRootBlackboard()->set("seg_meta", segment.meta);
+
   return BT::NodeStatus::SUCCESS;
 }
 
@@ -62,9 +87,9 @@ BT::NodeStatus ReplanRoute::tick()
   std::string reason; getInput("reason", reason);
   RCLCPP_WARN(btLogger(), "ReplanRoute: STUB sebep=%s", reason.c_str());
   // TODO: Mevcut pozisyondan yeni Dijkstra rotası hesapla
-  setOutput("route", std::string("[]"));
-  setOutput("route_size", 0);
-  setOutput("seg_index", 0);
+  // Kök blackboard'a yaz — SubTree autoremap sınırını aşar
+  globalRootBlackboard()->set("route_size", 0);
+  globalRootBlackboard()->set("seg_index", 0);
   return BT::NodeStatus::SUCCESS;
 }
 
@@ -73,7 +98,7 @@ BT::NodeStatus CalculateLaneChange::tick()
   std::string target_lane; getInput("target_lane", target_lane);
   RCLCPP_INFO(btLogger(), "CalculateLaneChange: STUB hedef=%s", target_lane.c_str());
   // TODO: Yanal offset hesapla (±3.5m şerit genişliği)
-  setOutput("seg_goal", std::string("0.0;0.0;0.0"));
+  globalRootBlackboard()->set("seg_goal", std::string("0.0;0.0;0.0"));  // kök BB
   return BT::NodeStatus::SUCCESS;
 }
 
@@ -156,13 +181,111 @@ BT::NodeStatus TurnConflictsWithSigns::tick()
 
 BT::NodeStatus CheckStopAccuracy::tick()
 {
-  // TODO: /amcl_pose veya /odom'dan mevcut pozisyonu al, point ile karşılaştır
-  return BT::NodeStatus::SUCCESS;  // Stub: her zaman doğru
+  auto& odom = OdometryProvider::instance();
+
+  // Veri yoksa veya bayatsa → FAILURE (güvenli taraf: "doğru durdum" diyemeyiz)
+  if (!odom.isFresh()) {
+    RCLCPP_WARN_THROTTLE(btLogger(), *getRosNode(config()), 2000,
+      "CheckStopAccuracy: odometry verisi yok/bayat — FAILURE");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // Mevcut pozisyonu al
+  double cur_x, cur_y, cur_yaw;
+  if (!odom.getPose(cur_x, cur_y, cur_yaw)) {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // Hedef noktayı "x;y;yaw" formatından parse et
+  std::string point_str;
+  if (!getInput("point", point_str) || point_str.empty()) {
+    RCLCPP_ERROR(btLogger(), "CheckStopAccuracy: 'point' portu boş!");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  double tgt_x = 0.0, tgt_y = 0.0, tgt_yaw = 0.0;
+  {
+    std::istringstream iss(point_str);
+    char delim;
+    if (!(iss >> tgt_x >> delim >> tgt_y >> delim >> tgt_yaw)) {
+      RCLCPP_ERROR(btLogger(), "CheckStopAccuracy: 'point' parse hatası: '%s'", point_str.c_str());
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+
+  // Toleransları oku
+  double tolerance = 1.0;
+  double heading_tolerance_deg = 15.0;
+  getInput("tolerance", tolerance);
+  getInput("heading_tolerance", heading_tolerance_deg);
+  double heading_tolerance_rad = heading_tolerance_deg * M_PI / 180.0;
+
+  // Öklid mesafesi
+  double dx = cur_x - tgt_x;
+  double dy = cur_y - tgt_y;
+  double dist = std::sqrt(dx * dx + dy * dy);
+
+  // Yaw farkı ([-π, π] aralığına normalize et)
+  double tgt_yaw_rad = tgt_yaw * M_PI / 180.0;  // XML'de derece olarak gelir
+  double yaw_err = cur_yaw - tgt_yaw_rad;
+  // Normalize to [-π, π]
+  while (yaw_err > M_PI)  yaw_err -= 2.0 * M_PI;
+  while (yaw_err < -M_PI) yaw_err += 2.0 * M_PI;
+
+  bool pos_ok = dist <= tolerance;
+  bool yaw_ok = std::fabs(yaw_err) <= heading_tolerance_rad;
+
+  RCLCPP_INFO_THROTTLE(btLogger(), *getRosNode(config()), 1000,
+    "CheckStopAccuracy: dist=%.3f (tol=%.2f) yaw_err=%.1f° (tol=%.1f°) → %s",
+    dist, tolerance,
+    yaw_err * 180.0 / M_PI, heading_tolerance_deg,
+    (pos_ok && yaw_ok) ? "SUCCESS" : "FAILURE");
+
+  return (pos_ok && yaw_ok) ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus IsStuck::tick()
 {
-  // TODO: /odom'dan son N saniyedeki mesafeyi hesapla, eşik altında mı?
+  auto& odom = OdometryProvider::instance();
+
+  // Veri yoksa veya bayatsa → FAILURE (güvenli taraf: GPS kesildiyse
+  // yanlışlıkla recovery moduna girmemeli)
+  if (!odom.isFresh()) {
+    stuck_active_ = false;  // timer'ı sıfırla
+    RCLCPP_WARN_THROTTLE(btLogger(), *getRosNode(config()), 2000,
+      "IsStuck: odometry verisi yok/bayat — FAILURE");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  double speed = 0.0;
+  if (!odom.getLinearSpeed(speed)) {
+    stuck_active_ = false;
+    return BT::NodeStatus::FAILURE;
+  }
+
+  constexpr double kSpeedThreshold = 0.05;  // m/s
+  constexpr double kStuckDurationSec = 5.0; // saniye
+
+  auto now = std::chrono::steady_clock::now();
+
+  if (speed < kSpeedThreshold) {
+    if (!stuck_active_) {
+      // Düşük hız başladı, zamanlayıcıyı başlat
+      stuck_active_ = true;
+      stuck_since_ = now;
+    }
+    double elapsed = std::chrono::duration<double>(now - stuck_since_).count();
+    if (elapsed >= kStuckDurationSec) {
+      RCLCPP_WARN(btLogger(),
+        "IsStuck: hız=%.3f m/s, %.1f sn boyunca düşük → STUCK (SUCCESS)",
+        speed, elapsed);
+      return BT::NodeStatus::SUCCESS;  // takılmış!
+    }
+  } else {
+    // Hız eşiğin üstünde, timer'ı sıfırla
+    stuck_active_ = false;
+  }
+
   return BT::NodeStatus::FAILURE;
 }
 

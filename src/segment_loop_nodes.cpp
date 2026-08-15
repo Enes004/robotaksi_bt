@@ -24,25 +24,18 @@ namespace robotaksi_bt {
 // ═══════════════════════════════════════════════════════════════
 BT::NodeStatus HasMoreSegments::tick()
 {
-  // Port'lardan değerleri oku
+  // Kök blackboard'dan oku — SubTree autoremap sınırını aşar
   int seg_index = 0;
   int route_size = 0;
-
-  // getInput<T>(port_adı, değişken) — Blackboard'dan okur
-  // Başarısızsa (port yok/tip uyumsuz) değişken değişmez
-  getInput("seg_index", seg_index);
-  getInput("route_size", route_size);
+  globalRootBlackboard()->get("seg_index", seg_index);
+  globalRootBlackboard()->get("route_size", route_size);
 
   // Saf karşılaştırma — hiçbir state değiştirmez
   bool has_more = (seg_index < route_size);
 
-  // RCLCPP_DEBUG: sadece debug seviyesinde log (üretimde görünmez)
   RCLCPP_DEBUG(btLogger(), "HasMoreSegments: %d / %d → %s",
                seg_index, route_size, has_more ? "DEVAM" : "BİTTİ");
 
-  // Condition node dönüş kuralı:
-  //   true  → SUCCESS (koşul sağlandı)
-  //   false → FAILURE (koşul sağlanmadı)
   return has_more ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
@@ -77,7 +70,7 @@ BT::NodeStatus HasMoreSegments::tick()
 BT::NodeStatus IsSegmentType::tick()
 {
   std::string seg_type, expected;
-  getInput("seg_type", seg_type);
+  globalRootBlackboard()->get("seg_type", seg_type);  // kök BB — autoremap sınırını aşar
   getInput("expected", expected);
 
   // Büyük/küçük harf duyarlı karşılaştırma
@@ -152,18 +145,17 @@ BT::NodeStatus AdvanceSegment::tick()
 {
   int seg_index = 0;
 
-  // Blackboard'dan oku
-  getInput("seg_index", seg_index);
+  // Kök blackboard'dan oku
+  globalRootBlackboard()->get("seg_index", seg_index);
 
   // 1 artır
   seg_index++;
 
-  // Blackboard'a geri yaz — BidirectionalPort sayesinde aynı anahtar
-  setOutput("seg_index", seg_index);
+  // Kök blackboard'a geri yaz — SubTree autoremap sınırını aşar
+  globalRootBlackboard()->set("seg_index", seg_index);
 
   RCLCPP_INFO(btLogger(), "AdvanceSegment: yeni index = %d", seg_index);
 
-  // SyncActionNode — her zaman SUCCESS veya FAILURE
   return BT::NodeStatus::SUCCESS;
 }
 

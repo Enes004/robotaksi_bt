@@ -15,6 +15,9 @@ find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
@@ -41,6 +44,9 @@ ament_target_dependencies(segment_bt_nodes
   rclcpp
   geometry_msgs
   std_msgs
+  nav_msgs
+  tf2
+  tf2_geometry_msgs
 )
 target_link_libraries(segment_bt_nodes yaml-cpp nlohmann_json::nlohmann_json)
 
@@ -61,6 +67,9 @@ ament_target_dependencies(bt_test
   rclcpp
   geometry_msgs
   std_msgs
+  nav_msgs
+  tf2
+  tf2_geometry_msgs
 )
 
 install(TARGETS bt_test
@@ -90,5 +99,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_robotaksi_bt_nodes HAS_LIBRARY_TARGET)
-ament_export_dependencies(behaviortree_cpp_v3 rclcpp geometry_msgs std_msgs nlohmann_json)
+ament_export_dependencies(behaviortree_cpp_v3 rclcpp geometry_msgs std_msgs nav_msgs tf2 tf2_geometry_msgs nlohmann_json)
 ament_package()

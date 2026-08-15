@@ -59,6 +59,7 @@ struct GraphNode {
   std::string id;
   double x = 0.0;   // metre (yerel düzlem)
   double y = 0.0;   // metre (yerel düzlem)
+  std::string type;  // LANE_FOLLOW, INTERSECTION, vb. (loadTypesFromGeoJSON ile dolar)
 };
 
 struct Segment {
@@ -255,11 +256,12 @@ public:
   // BÜYÜK HARF bekler (örn. "PASSENGER_STOP", bkz. BT XML'deki
   // IsSegmentType expected="..." karşılaştırması) — burada çevrilir.
   //
-  // Not: Segment::type, o segmentin kaynağı olan lanelet'in (from_node)
-  // tipini yansıtır (loadFromYAML içinde segment geometrisi de kaynak
-  // lanelet'in path'inden alınıyor — bkz. lanelet_paths_[src]). Bu
-  // yüzden eşleştirme lanelet_id → adjacency_[lanelet_id] (o düğümden
-  // çıkan segmentler) üzerinden yapılır.
+  // Eşleştirme mantığı: Her lanelet KENDİ tipini taşır. GeoJSON'daki
+  // lanelet_id, segments_ içindeki Segment::from_node alanıyla
+  // DOĞRUDAN eşleştirilir. Bir lanelet'ten birden fazla çıkış
+  // (segment) olabilir — hepsi aynı tipi alır. Çıkışı olmayan
+  // (dead-end) lanelet'lerin tipi de nodes_ üzerinden saklanır,
+  // böylece planRoute sonrasında ekstra bilgi çekilebilir.
   //
   // Dosyada eşleşmeyen (geometri var ama tip dosyasında olmayan)
   // lanelet'ler mevcut değerini (loadFromYAML'daki varsayılan
@@ -282,6 +284,15 @@ public:
       return false;
     }
 
+    // Hızlı erişim için from_node → segment indeksleri haritası oluştur.
+    // adjacency_ KULLANILAMAZ çünkü adjacency_ sadece çıkışı olan
+    // düğümleri içerir; dead-end lanelet'ler (passenger_stop, parking
+    // vb.) orada yer almaz.
+    std::unordered_map<std::string, std::vector<size_t>> from_node_index;
+    for (size_t i = 0; i < segments_.size(); ++i) {
+      from_node_index[segments_[i].from_node].push_back(i);
+    }
+
     for (const auto& feature : root["features"]) {
       if (!feature.contains("properties")) continue;
       const auto& props = feature["properties"];
@@ -293,12 +304,19 @@ public:
       std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(),
                      [](unsigned char c) { return std::toupper(c); });
 
-      // lanelet_id, o lanelet'ten çıkan segment(ler)in from_node'una karşılık gelir.
-      auto adj_it = adjacency_.find(lanelet_id);
-      if (adj_it == adjacency_.end()) continue;  // bu lanelet için geometri yok — sessizce atla
+      // 1) Bu lanelet'ten çıkan tüm segmentlerin tipini güncelle
+      auto idx_it = from_node_index.find(lanelet_id);
+      if (idx_it != from_node_index.end()) {
+        for (size_t seg_idx : idx_it->second) {
+          segments_[seg_idx].type = type_upper;
+        }
+      }
 
-      for (size_t seg_idx : adj_it->second) {
-        segments_[seg_idx].type = type_upper;
+      // 2) Düğüm düzeyinde tip bilgisini de sakla (dead-end lanelet'ler
+      //    dahil — çıkışı olmasa bile tip sorgulanabilsin diye).
+      auto node_it = nodes_.find(lanelet_id);
+      if (node_it != nodes_.end()) {
+        node_it->second.type = type_upper;
       }
     }
 
@@ -341,6 +359,8 @@ public:
   size_t segmentCount() const { return segments_.size(); }
 
   const std::vector<Segment>& allSegments() const { return segments_; }
+
+  const std::unordered_map<std::string, GraphNode>& allNodes() const { return nodes_; }
 
   // En yakın düğümü bul (x,y koordinatına göre — metre cinsinden)
   std::string findNearestNode(double x, double y) const {

@@ -23,8 +23,33 @@ BT::NodeStatus SetMaxSpeed::tick()
 {
   double speed = 0.0;
 
-  // Port okuma — başarısızsa FAILURE dön
-  if (!getInput("speed", speed)) {
+  // Önce normal port sistemiyle dene (aynı SubTree seviyesinde çalışır)
+  bool found = getInput("speed", speed).operator bool();
+
+  if (!found) {
+    // getInput başarısız → autoremap SubTree sınırında kopmuş.
+    // TODO: XML'deki hangi hız değişkeninin aktif olduğunu doğrudan bilmiyoruz,
+    //       sırayla deniyoruz — daha temiz çözüm SetMaxSpeed'in XML'de
+    //       kullandığı gerçek port adını okumaktan geçer.
+    const char* fallback_keys[] = {
+      "cruise_speed", "intersection_speed", "roundabout_speed",
+      "tunnel_speed", "parking_speed"
+    };
+    for (const char* key : fallback_keys) {
+      std::string str_val;
+      if (globalRootBlackboard()->get(key, str_val)) {
+        try {
+          speed = std::stod(str_val);
+          found = true;
+          break;
+        } catch (const std::exception&) {
+          continue;  // bu anahtar sayıya çevrilemedi, sıradakini dene
+        }
+      }
+    }
+  }
+
+  if (!found) {
     RCLCPP_ERROR(btLogger(), "SetMaxSpeed: 'speed' portu okunamadı!");
     return BT::NodeStatus::FAILURE;
   }
