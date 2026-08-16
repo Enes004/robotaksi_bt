@@ -92,13 +92,6 @@ public:
 
 // ═══════════════ 🔧 SENSÖR BAĞIMLI ═══════════════
 
-class EmergencyStopRequested : public BT::ConditionNode {
-public:
-  EmergencyStopRequested(const std::string& n, const BT::NodeConfiguration& c) : BT::ConditionNode(n,c) {}
-  static BT::PortsList providedPorts() { return {}; }
-  BT::NodeStatus tick() override;
-};
-
 class PedestrianAhead : public BT::ConditionNode {
 public:
   PedestrianAhead(const std::string& n, const BT::NodeConfiguration& c) : BT::ConditionNode(n,c) {}
@@ -220,15 +213,6 @@ public:
   static BT::PortsList providedPorts() {
     return { BT::InputPort<std::string>("light_color") };
   }
-  BT::NodeStatus onStart() override;
-  BT::NodeStatus onRunning() override;
-  void onHalted() override;
-};
-
-class WaitForGoSignal : public BT::StatefulActionNode {
-public:
-  WaitForGoSignal(const std::string& n, const BT::NodeConfiguration& c) : BT::StatefulActionNode(n,c) {}
-  static BT::PortsList providedPorts() { return {}; }
   BT::NodeStatus onStart() override;
   BT::NodeStatus onRunning() override;
   void onHalted() override;

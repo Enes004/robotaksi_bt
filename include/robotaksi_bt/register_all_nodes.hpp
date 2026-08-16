@@ -23,7 +23,7 @@ namespace robotaksi_bt {
 inline void registerAllNodes(BT::BehaviorTreeFactory& factory)
 {
   // ── 👁️ Perception: Sensör/Algılama Bağımlı ──
-  factory.registerNodeType<EmergencyStopRequested>("EmergencyStopRequested");
+
   factory.registerNodeType<PedestrianAhead>("PedestrianAhead");
   factory.registerNodeType<DynamicObstacleAhead>("DynamicObstacleAhead");
   factory.registerNodeType<StaticObstacleInLane>("StaticObstacleInLane");
@@ -41,7 +41,7 @@ inline void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<FollowLaneSegment>("FollowLaneSegment");
   factory.registerNodeType<WaitForClear>("WaitForClear");
   factory.registerNodeType<WaitForGreenLight>("WaitForGreenLight");
-  factory.registerNodeType<WaitForGoSignal>("WaitForGoSignal");
+
   factory.registerNodeType<ProceedOnGreen>("ProceedOnGreen");
   factory.registerNodeType<StopAtStopLine>("StopAtStopLine");
   factory.registerNodeType<YieldAtRoundabout>("YieldAtRoundabout");

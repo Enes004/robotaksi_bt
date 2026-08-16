@@ -18,7 +18,7 @@ find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
-find_package(yaml-cpp REQUIRED)
+
 find_package(nlohmann_json REQUIRED)
 
 include_directories(include)
@@ -48,7 +48,7 @@ ament_target_dependencies(segment_bt_nodes
   tf2
   tf2_geometry_msgs
 )
-target_link_libraries(segment_bt_nodes yaml-cpp nlohmann_json::nlohmann_json)
+target_link_libraries(segment_bt_nodes nlohmann_json::nlohmann_json)
 
 install(TARGETS segment_bt_nodes
   EXPORT export_robotaksi_bt_nodes

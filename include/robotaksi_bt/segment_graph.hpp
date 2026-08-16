@@ -1,16 +1,18 @@
 // ============================================================================
 // Teknofest 2026 Robotaksi — Segment Graf Veri Yapısı
 //
-// Haritayı yönlü graf olarak modelleyen sınıf.
-//   - Düğümler (Node): her lanelet bir düğüm.
-//   - Kenarlar (Edge): lanelet'ler arası geçiş.
+// Haritayı YÖNSÜZ graf olarak modelleyen sınıf.
+//   - Düğümler (Node): her lanelet bir düğüm = bir segment.
+//   - Kenarlar (Edge): lanelet uç noktaları 0.5 m dahilinde ise bağlı.
 //
-// GİRDİ: Haritacı ekibin lanelet YAML dosyası (yaml-cpp ile parse edilir).
+// GİRDİ: Haritacı ekibin 3 katmanlı GeoJSON dosyaları:
+//   - lanelet_layer.geojson   (160 lanelet, center_b_id → linestring eşleşmesi)
+//   - linestring_layer.geojson (452 çizgi, line_id → koordinatlar)
 //
 // Kullanım:
 //   SegmentGraph graph;
-//   graph.loadFromYAML("harita.yaml");
-//   auto route = graph.planRoute({"4","10","16"});
+//   graph.loadFromGeoJSON("lanelet_layer.geojson", "linestring_layer.geojson");
+//   auto route = graph.planRoute({"1","22"});
 // ============================================================================
 #ifndef SEGMENT_GRAPH_HPP
 #define SEGMENT_GRAPH_HPP
@@ -19,6 +21,7 @@
 #include <vector>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <queue>
 #include <limits>
 #include <cmath>
@@ -26,8 +29,8 @@
 #include <fstream>
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 
-#include <yaml-cpp/yaml.h>
 #include <nlohmann/json.hpp>
 
 namespace robotaksi_bt {
@@ -59,7 +62,7 @@ struct GraphNode {
   std::string id;
   double x = 0.0;   // metre (yerel düzlem)
   double y = 0.0;   // metre (yerel düzlem)
-  std::string type;  // LANE_FOLLOW, INTERSECTION, vb. (loadTypesFromGeoJSON ile dolar)
+  std::string type;  // LANE_FOLLOW, INTERSECTION, vb.
 };
 
 struct Segment {
@@ -100,234 +103,250 @@ public:
   SegmentGraph() = default;
 
   // ──────────────────────────────────────────────
-  // YAML'dan graf yükleme (yaml-cpp tabanlı)
+  // GeoJSON'dan graf yükleme (nlohmann::json tabanlı)
   //
-  // Beklenen format:
-  //   nodes:
-  //     - lanelet_id: 4
-  //       start: [lon, lat]
-  //       end:   [lon, lat]
-  //       path:  [[lon,lat], ...]
-  //       length: ...           # kullanılmıyor
-  //       lanelet_properties: {}
-  //   edges:
-  //     - source: 4
-  //       target: 10
-  //       cost: ...             # kullanılmıyor — kendi metre cost'unu hesaplıyoruz
+  // Yeni 3 katmanlı GeoJSON formatı:
+  //   lanelet_file:     lanelet_layer.geojson (160 lanelet)
+  //   linestring_file:  linestring_layer.geojson (452 çizgi)
+  //
+  // center_b_id ile linestring eşleşerek her lanelet'in
+  // merkez çizgisi (path_xy) elde edilir.
   // ──────────────────────────────────────────────
-  bool loadFromYAML(const std::string& filepath) {
-    YAML::Node root;
-    try {
-      root = YAML::LoadFile(filepath);
-    } catch (const YAML::Exception&) {
-      return false;
-    }
-
+  bool loadFromGeoJSON(const std::string& lanelet_file,
+                       const std::string& linestring_file) {
     nodes_.clear();
     segments_.clear();
     adjacency_.clear();
-    lanelet_paths_.clear();
+    segment_index_.clear();
 
-    // ── 1) NODES ──
-    if (!root["nodes"] || !root["nodes"].IsSequence()) {
-      return false;
-    }
+    // ── 1) LİNESTRİNG KATMANI: line_id → koordinat listesi ──
+    std::unordered_map<int, std::vector<std::pair<double, double>>> line_coords;
+    {
+      std::ifstream file(linestring_file);
+      if (!file.is_open()) return false;
 
-    for (const auto& node_yaml : root["nodes"]) {
-      std::string lid = std::to_string(node_yaml["lanelet_id"].as<int>());
+      nlohmann::json root;
+      try { file >> root; } catch (...) { return false; }
 
-      // "end" noktasını düğüm pozisyonu olarak al (segment hedefi)
-      double end_lon = node_yaml["end"][0].as<double>();
-      double end_lat = node_yaml["end"][1].as<double>();
+      if (!root.contains("features") || !root["features"].is_array())
+        return false;
 
-      GraphNode gn;
-      gn.id = lid;
-      gn.x = lonToMeters(end_lon);
-      gn.y = latToMeters(end_lat);
-      nodes_[lid] = gn;
+      for (const auto& feat : root["features"]) {
+        if (!feat.contains("properties") || !feat.contains("geometry"))
+          continue;
+        const auto& props = feat["properties"];
+        if (!props.contains("line_id") || props["line_id"].is_null())
+          continue;
 
-      // path noktalarını metre'ye çevirip sakla
-      std::vector<std::pair<double, double>> path_meters;
-      if (node_yaml["path"] && node_yaml["path"].IsSequence()) {
-        for (const auto& pt : node_yaml["path"]) {
-          double plon = pt[0].as<double>();
-          double plat = pt[1].as<double>();
-          path_meters.emplace_back(lonToMeters(plon), latToMeters(plat));
+        int line_id = props["line_id"].get<int>();
+        const auto& geom = feat["geometry"];
+
+        // MultiLineString: coordinates = [[[lon,lat], ...]]
+        if (!geom.contains("coordinates") || !geom["coordinates"].is_array() ||
+            geom["coordinates"].empty())
+          continue;
+
+        // İlk LineString'i al
+        const auto& first_ls = geom["coordinates"][0];
+        if (!first_ls.is_array()) continue;
+
+        std::vector<std::pair<double, double>> coords;
+        for (const auto& pt : first_ls) {
+          if (pt.is_array() && pt.size() >= 2) {
+            coords.emplace_back(pt[0].get<double>(), pt[1].get<double>());
+          }
+        }
+        if (!coords.empty()) {
+          line_coords[line_id] = std::move(coords);
         }
       }
-      lanelet_paths_[lid] = std::move(path_meters);
-
-      // TODO: lanelet_properties dolunca buradan segment_type oku.
-      // Şu an haritacı ekip boş gönderiyor, dolayısıyla aşağıda
-      // varsayılan "LANE_FOLLOW" kullanılıyor.
-      // Örnek gelecek format:
-      //   lanelet_properties:
-      //     segment_type: INTERSECTION
-      //     meta: "exit_node:12"
     }
 
-    // ── 2) EDGES ──
-    if (!root["edges"] || !root["edges"].IsSequence()) {
-      return false;
-    }
+    // ── 2) LANELET KATMANI: her lanelet → segment ──
+    {
+      std::ifstream file(lanelet_file);
+      if (!file.is_open()) return false;
 
-    for (const auto& edge_yaml : root["edges"]) {
-      std::string src = std::to_string(edge_yaml["source"].as<int>());
-      std::string tgt = std::to_string(edge_yaml["target"].as<int>());
+      nlohmann::json root;
+      try { file >> root; } catch (...) { return false; }
 
-      // Kaynak düğüm yoksa atla
-      if (nodes_.find(src) == nodes_.end() ||
-          nodes_.find(tgt) == nodes_.end()) {
-        continue;
+      if (!root.contains("features") || !root["features"].is_array())
+        return false;
+
+      for (const auto& feat : root["features"]) {
+        if (!feat.contains("properties")) continue;
+        const auto& props = feat["properties"];
+
+        if (!props.contains("lanelet_id") || props["lanelet_id"].is_null())
+          continue;
+        if (!props.contains("center_b_id") || props["center_b_id"].is_null())
+          continue;
+
+        std::string lid = std::to_string(props["lanelet_id"].get<int>());
+
+        // ── lanelet_type → büyük harf ──
+        std::string type_str = "LANE_FOLLOW";  // varsayılan
+        if (props.contains("lanelet_type") && !props["lanelet_type"].is_null()) {
+          type_str = props["lanelet_type"].get<std::string>();
+          std::transform(type_str.begin(), type_str.end(), type_str.begin(),
+                         [](unsigned char c) { return std::toupper(c); });
+        }
+
+        // ── center_b_id parse: tek "347" veya virgüllü "373,374,375" ──
+        std::string cbid_raw = props["center_b_id"].get<std::string>();
+        std::vector<int> center_ids;
+        {
+          std::istringstream ss(cbid_raw);
+          std::string token;
+          while (std::getline(ss, token, ',')) {
+            // Boşlukları temizle
+            token.erase(std::remove_if(token.begin(), token.end(),
+                        [](unsigned char c) { return std::isspace(c); }),
+                        token.end());
+            if (!token.empty()) {
+              try { center_ids.push_back(std::stoi(token)); }
+              catch (...) { /* geçersiz id, atla */ }
+            }
+          }
+        }
+
+        if (center_ids.empty()) continue;
+
+        // ── Koordinatları birleştir (sırayla) ──
+        std::vector<std::pair<double, double>> merged_lonlat;
+        for (int cid : center_ids) {
+          auto it = line_coords.find(cid);
+          if (it == line_coords.end()) continue;
+          const auto& lc = it->second;
+
+          if (!merged_lonlat.empty() && !lc.empty()) {
+            // Birleştirme yönünü kontrol et: mevcut son nokta,
+            // yeni segmentin başına mı sonuna mı daha yakın?
+            auto& last = merged_lonlat.back();
+            double d_front = std::hypot(lc.front().first - last.first,
+                                        lc.front().second - last.second);
+            double d_back = std::hypot(lc.back().first - last.first,
+                                       lc.back().second - last.second);
+            if (d_back < d_front) {
+              // Ters sırada birleştir
+              for (auto rit = lc.rbegin(); rit != lc.rend(); ++rit) {
+                merged_lonlat.push_back(*rit);
+              }
+            } else {
+              for (const auto& p : lc) {
+                merged_lonlat.push_back(p);
+              }
+            }
+          } else {
+            for (const auto& p : lc) {
+              merged_lonlat.push_back(p);
+            }
+          }
+        }
+
+        if (merged_lonlat.empty()) continue;
+
+        // ── Lon/Lat → Metre dönüşümü ──
+        std::vector<std::pair<double, double>> path_meters;
+        path_meters.reserve(merged_lonlat.size());
+        for (const auto& [lon, lat] : merged_lonlat) {
+          path_meters.emplace_back(lonToMeters(lon), latToMeters(lat));
+        }
+
+        // ── Cost: path noktaları arası öklid mesafe toplamı (metre) ──
+        double path_cost = 0.0;
+        for (size_t i = 1; i < path_meters.size(); ++i) {
+          double dx = path_meters[i].first - path_meters[i - 1].first;
+          double dy = path_meters[i].second - path_meters[i - 1].second;
+          path_cost += std::hypot(dx, dy);
+        }
+        if (path_cost <= 0.0) path_cost = 1.0;
+
+        // ── Goal: path'in SON noktası ──
+        double gx = path_meters.back().first;
+        double gy = path_meters.back().second;
+
+        // ── Goal yaw: son iki noktanın yönü ──
+        double gyaw = 0.0;
+        if (path_meters.size() >= 2) {
+          auto& p1 = path_meters[path_meters.size() - 2];
+          auto& p2 = path_meters[path_meters.size() - 1];
+          gyaw = std::atan2(p2.second - p1.second, p2.first - p1.first);
+        }
+
+        // ── Segment oluştur ──
+        Segment seg;
+        seg.id = lid;
+        seg.from_node = lid;
+        seg.to_node = lid;
+        seg.type = type_str;
+        seg.cost = path_cost;
+        seg.goal_x = gx;
+        seg.goal_y = gy;
+        seg.goal_yaw = gyaw;
+        seg.path_xy = std::move(path_meters);
+
+        // ── GraphNode oluştur ──
+        GraphNode gn;
+        gn.id = lid;
+        gn.x = gx;
+        gn.y = gy;
+        gn.type = type_str;
+        nodes_[lid] = gn;
+
+        size_t idx = segments_.size();
+        segment_index_[lid] = idx;
+        segments_.push_back(std::move(seg));
       }
-
-      Segment seg;
-      seg.id = src + "_" + tgt;
-      seg.from_node = src;
-      seg.to_node = tgt;
-
-      // TODO: lanelet_properties dolunca buradan segment_type oku.
-      seg.type = "LANE_FOLLOW";
-
-      // path noktalarından metre cinsinden cost hesapla
-      const auto& path = lanelet_paths_[src];
-      seg.path_xy = path;
-
-      double path_cost = 0.0;
-      for (size_t i = 1; i < path.size(); ++i) {
-        double dx = path[i].first - path[i - 1].first;
-        double dy = path[i].second - path[i - 1].second;
-        path_cost += std::hypot(dx, dy);
-      }
-
-      // Path boşsa veya tek noktaysa, düğüm arası düz mesafe kullan
-      if (path_cost <= 0.0) {
-        const auto& fn = nodes_[src];
-        const auto& tn = nodes_[tgt];
-        path_cost = std::hypot(tn.x - fn.x, tn.y - fn.y);
-      }
-      seg.cost = path_cost;
-
-      // Hedef pozisyon = hedef düğümün koordinatı (bitiş noktası)
-      seg.goal_x = nodes_[tgt].x;
-      seg.goal_y = nodes_[tgt].y;
-
-      // Yaw = son iki path noktasından hesapla; yoksa düğüm arası yön
-      if (path.size() >= 2) {
-        auto& p1 = path[path.size() - 2];
-        auto& p2 = path[path.size() - 1];
-        seg.goal_yaw = std::atan2(p2.second - p1.second,
-                                   p2.first - p1.first);
-      } else {
-        seg.goal_yaw = std::atan2(nodes_[tgt].y - nodes_[src].y,
-                                   nodes_[tgt].x - nodes_[src].x);
-      }
-
-      if (seg.cost <= 0.0) seg.cost = 1.0;
-
-      size_t idx = segments_.size();
-      segments_.push_back(std::move(seg));
-      adjacency_[src].push_back(idx);
     }
 
-    return !nodes_.empty();
-  }
+    // ── 3) YÖNSÜZ BAĞLANTI KUR ──
+    // İki lanelet bağlı: birinin herhangi bir ucu (ilk veya son nokta)
+    // diğerinin herhangi bir ucuna 0.5 m'den yakınsa.
+    constexpr double kProximityThreshold = 0.5;  // metre
 
-  // ──────────────────────────────────────────────
-  // GeoJSON'dan segment tiplerini yükleme (nlohmann::json tabanlı)
-  //
-  // ÖNEMLİ: Bu fonksiyon loadFromYAML(...)'dan SONRA, çağıran kod
-  // (örn. BT node) tarafından AYRICA çağrılmalıdır — loadFromYAML
-  // içine gömülü değildir. Sebep: harita ekibi geometriyi
-  // (routing_graph.yaml) ve lanelet tiplerini (lanelet_layer.geojson)
-  // AYRI dosyalar halinde, AYRI zamanlarda/sürümlerde gönderiyor; biri
-  // güncellenirken diğeri sabit kalabiliyor. İki yükleme adımını ayrı
-  // tutmak, tipler güncellendiğinde geometriyi (veya tam tersini)
-  // yeniden parse etmeden sadece ilgili fonksiyonu çağırmayı mümkün
-  // kılıyor.
-  //
-  // Beklenen format:
-  //   { "features": [
-  //       { "properties": { "lanelet_id": 224, "lanelet_type": "passenger_stop" }, ... },
-  //       ...
-  //   ]}
-  //
-  // lanelet_type küçük harf gelir (örn. "passenger_stop"); Segment::type
-  // BÜYÜK HARF bekler (örn. "PASSENGER_STOP", bkz. BT XML'deki
-  // IsSegmentType expected="..." karşılaştırması) — burada çevrilir.
-  //
-  // Eşleştirme mantığı: Her lanelet KENDİ tipini taşır. GeoJSON'daki
-  // lanelet_id, segments_ içindeki Segment::from_node alanıyla
-  // DOĞRUDAN eşleştirilir. Bir lanelet'ten birden fazla çıkış
-  // (segment) olabilir — hepsi aynı tipi alır. Çıkışı olmayan
-  // (dead-end) lanelet'lerin tipi de nodes_ üzerinden saklanır,
-  // böylece planRoute sonrasında ekstra bilgi çekilebilir.
-  //
-  // Dosyada eşleşmeyen (geometri var ama tip dosyasında olmayan)
-  // lanelet'ler mevcut değerini (loadFromYAML'daki varsayılan
-  // "LANE_FOLLOW") korur — hata verilmez.
-  // ──────────────────────────────────────────────
-  bool loadTypesFromGeoJSON(const std::string& filepath) {
-    std::ifstream file(filepath);
-    if (!file.is_open()) {
-      return false;
-    }
-
-    nlohmann::json root;
-    try {
-      file >> root;
-    } catch (const nlohmann::json::exception&) {
-      return false;
-    }
-
-    if (!root.contains("features") || !root["features"].is_array()) {
-      return false;
-    }
-
-    // Hızlı erişim için from_node → segment indeksleri haritası oluştur.
-    // adjacency_ KULLANILAMAZ çünkü adjacency_ sadece çıkışı olan
-    // düğümleri içerir; dead-end lanelet'ler (passenger_stop, parking
-    // vb.) orada yer almaz.
-    std::unordered_map<std::string, std::vector<size_t>> from_node_index;
     for (size_t i = 0; i < segments_.size(); ++i) {
-      from_node_index[segments_[i].from_node].push_back(i);
-    }
+      if (segments_[i].path_xy.empty()) continue;
+      const auto& pi_front = segments_[i].path_xy.front();
+      const auto& pi_back = segments_[i].path_xy.back();
 
-    for (const auto& feature : root["features"]) {
-      if (!feature.contains("properties")) continue;
-      const auto& props = feature["properties"];
-      if (!props.contains("lanelet_id") || !props.contains("lanelet_type")) continue;
-      if (props["lanelet_id"].is_null() || props["lanelet_type"].is_null()) continue;
+      for (size_t j = i + 1; j < segments_.size(); ++j) {
+        if (segments_[j].path_xy.empty()) continue;
+        const auto& pj_front = segments_[j].path_xy.front();
+        const auto& pj_back = segments_[j].path_xy.back();
 
-      std::string lanelet_id = std::to_string(props["lanelet_id"].get<int>());
-      std::string type_upper = props["lanelet_type"].get<std::string>();
-      std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(),
-                     [](unsigned char c) { return std::toupper(c); });
+        // 4 kombinasyonu kontrol et
+        bool connected = false;
+        double d1 = std::hypot(pi_back.first - pj_front.first,
+                               pi_back.second - pj_front.second);
+        double d2 = std::hypot(pi_back.first - pj_back.first,
+                               pi_back.second - pj_back.second);
+        double d3 = std::hypot(pi_front.first - pj_front.first,
+                               pi_front.second - pj_front.second);
+        double d4 = std::hypot(pi_front.first - pj_back.first,
+                               pi_front.second - pj_back.second);
 
-      // 1) Bu lanelet'ten çıkan tüm segmentlerin tipini güncelle
-      auto idx_it = from_node_index.find(lanelet_id);
-      if (idx_it != from_node_index.end()) {
-        for (size_t seg_idx : idx_it->second) {
-          segments_[seg_idx].type = type_upper;
+        if (d1 < kProximityThreshold || d2 < kProximityThreshold ||
+            d3 < kProximityThreshold || d4 < kProximityThreshold) {
+          connected = true;
+        }
+
+        if (connected) {
+          adjacency_[segments_[i].id].push_back(j);
+          adjacency_[segments_[j].id].push_back(i);
         }
       }
-
-      // 2) Düğüm düzeyinde tip bilgisini de sakla (dead-end lanelet'ler
-      //    dahil — çıkışı olmasa bile tip sorgulanabilsin diye).
-      auto node_it = nodes_.find(lanelet_id);
-      if (node_it != nodes_.end()) {
-        node_it->second.type = type_upper;
-      }
     }
 
-    return true;
+    return !segments_.empty();
   }
 
   // ──────────────────────────────────────────────
   // Rota planlama: sıralı waypoint'lerden geçen en kısa segment dizisi
   //
-  // waypoint_node_ids: ["4", "10", "16"]
+  // waypoint_node_ids: ["1", "22"]
   // Her ardışık çift arasında Dijkstra çalıştırır ve birleştirir.
+  // Rota bulunduktan sonra yön düzeltmesi yapılır.
   // ──────────────────────────────────────────────
   Route planRoute(const std::vector<std::string>& waypoint_node_ids) const {
     Route full_route;
@@ -342,6 +361,11 @@ public:
         full_route.segments.push_back(s);
         full_route.total_cost += s.cost;
       }
+    }
+
+    // Rota sonrası yön düzeltme
+    if (!full_route.segments.empty()) {
+      fixRouteDirections(full_route.segments);
     }
 
     return full_route;
@@ -363,14 +387,18 @@ public:
   const std::unordered_map<std::string, GraphNode>& allNodes() const { return nodes_; }
 
   // En yakın düğümü bul (x,y koordinatına göre — metre cinsinden)
+  // path_xy üzerindeki TÜM noktalara bakarak en yakın lanelet'i bulur
+  // (görev noktaları yolun ortasına denk gelebiliyor).
   std::string findNearestNode(double x, double y) const {
     std::string nearest;
     double min_dist = std::numeric_limits<double>::max();
-    for (auto& [id, node] : nodes_) {
-      double d = std::hypot(node.x - x, node.y - y);
-      if (d < min_dist) {
-        min_dist = d;
-        nearest = id;
+    for (const auto& seg : segments_) {
+      for (const auto& [px, py] : seg.path_xy) {
+        double d = std::hypot(px - x, py - y);
+        if (d < min_dist) {
+          min_dist = d;
+          nearest = seg.id;
+        }
       }
     }
     return nearest;
@@ -380,25 +408,38 @@ private:
   std::unordered_map<std::string, GraphNode> nodes_;
   std::vector<Segment> segments_;
 
-  // Adjacency list: node_id → [segment_index, ...]
+  // Adjacency list: node_id → [segment_index, ...] (YÖNSÜZ)
   std::unordered_map<std::string, std::vector<size_t>> adjacency_;
 
-  // Lanelet path noktaları (metre cinsinden) — edge cost hesabı için
-  std::unordered_map<std::string, std::vector<std::pair<double, double>>> lanelet_paths_;
+  // Segment id → segments_ index (hızlı erişim)
+  std::unordered_map<std::string, size_t> segment_index_;
 
   // ──────────────────────────────────────────────
-  // Dijkstra en kısa yol
+  // İki uç nokta arasındaki mesafe (metre)
   // ──────────────────────────────────────────────
-  std::vector<Segment> dijkstra(const std::string& start, const std::string& goal) const {
+  static double endpointDist(const std::pair<double,double>& a,
+                             const std::pair<double,double>& b) {
+    return std::hypot(a.first - b.first, a.second - b.second);
+  }
+
+  // ──────────────────────────────────────────────
+  // Dijkstra en kısa yol (YÖNSÜZ graf)
+  //
+  // Her segment bir düğüm. Komşuluk adjacency_ ile tanımlanır.
+  // Cost = geçilen (hedef) segment'in kendi cost'u.
+  // ──────────────────────────────────────────────
+  std::vector<Segment> dijkstra(const std::string& start,
+                                const std::string& goal) const {
     if (start == goal) return {};
-    if (adjacency_.find(start) == adjacency_.end()) return {};
+    if (segment_index_.find(start) == segment_index_.end()) return {};
+    if (segment_index_.find(goal) == segment_index_.end()) return {};
 
-    // Mesafe ve önceki segment
+    // Mesafe ve önceki düğüm
     std::unordered_map<std::string, double> dist;
-    std::unordered_map<std::string, int> prev_seg;  // segment index
-    for (auto& [id, _] : nodes_) {
-      dist[id] = std::numeric_limits<double>::max();
-      prev_seg[id] = -1;
+    std::unordered_map<std::string, std::string> prev;
+    for (const auto& seg : segments_) {
+      dist[seg.id] = std::numeric_limits<double>::max();
+      prev[seg.id] = "";
     }
     dist[start] = 0.0;
 
@@ -417,13 +458,13 @@ private:
       auto adj_it = adjacency_.find(u);
       if (adj_it == adjacency_.end()) continue;
 
-      for (size_t seg_idx : adj_it->second) {
-        const auto& seg = segments_[seg_idx];
-        double new_dist = dist[u] + seg.cost;
-        if (new_dist < dist[seg.to_node]) {
-          dist[seg.to_node] = new_dist;
-          prev_seg[seg.to_node] = static_cast<int>(seg_idx);
-          pq.push({new_dist, seg.to_node});
+      for (size_t neighbor_idx : adj_it->second) {
+        const auto& neighbor = segments_[neighbor_idx];
+        double new_dist = dist[u] + neighbor.cost;
+        if (new_dist < dist[neighbor.id]) {
+          dist[neighbor.id] = new_dist;
+          prev[neighbor.id] = u;
+          pq.push({new_dist, neighbor.id});
         }
       }
     }
@@ -433,12 +474,99 @@ private:
 
     std::vector<Segment> path;
     std::string cur = goal;
-    while (cur != start && prev_seg[cur] >= 0) {
-      path.push_back(segments_[prev_seg[cur]]);
-      cur = segments_[prev_seg[cur]].from_node;
+    while (!cur.empty() && cur != start) {
+      auto idx_it = segment_index_.find(cur);
+      if (idx_it == segment_index_.end()) break;
+      path.push_back(segments_[idx_it->second]);
+      cur = prev[cur];
+    }
+    // Başlangıç segment'ini de ekle
+    {
+      auto idx_it = segment_index_.find(start);
+      if (idx_it != segment_index_.end()) {
+        path.push_back(segments_[idx_it->second]);
+      }
     }
     std::reverse(path.begin(), path.end());
     return path;
+  }
+
+  // ──────────────────────────────────────────────
+  // Rota sonrası yön düzeltme
+  //
+  // Yönsüz graftan gelen rota segmentlerinin path_xy yönü
+  // trafik akış yönünü göstermeyebilir. Ardışık segment
+  // çiftlerinin bağlantı uçlarına bakarak gerektiğinde
+  // path_xy'yi ters çevirir.
+  //
+  // Mantık: segment A'dan segment B'ye geçiliyorsa,
+  // A'nın B'ye DEĞEN ucu A'nın çıkış noktası olmalı.
+  // Eğer A'nın "başlangıç" ucu B'ye değiyorsa, A ters
+  // okunmalı demektir.
+  // ──────────────────────────────────────────────
+  static void fixRouteDirections(std::vector<Segment>& route) {
+    if (route.size() < 2) return;
+
+    constexpr double kThreshold = 0.5;
+
+    // İlk segment için: ikinci segmente değen uç çıkış olmalı.
+    // İlk segment'in hangi ucu ikinci segment'in herhangi bir ucuna yakın?
+    {
+      auto& A = route[0];
+      const auto& B = route[1];
+      if (A.path_xy.size() >= 2 && B.path_xy.size() >= 2) {
+        // A'nın sonu → B'nin herhangi bir ucu
+        double d_back_front = endpointDist(A.path_xy.back(), B.path_xy.front());
+        double d_back_back  = endpointDist(A.path_xy.back(), B.path_xy.back());
+        // A'nın başı → B'nin herhangi bir ucu
+        double d_front_front = endpointDist(A.path_xy.front(), B.path_xy.front());
+        double d_front_back  = endpointDist(A.path_xy.front(), B.path_xy.back());
+
+        double min_back = std::min(d_back_front, d_back_back);
+        double min_front = std::min(d_front_front, d_front_back);
+
+        // Eğer A'nın başı B'ye daha yakınsa → A ters çevrilmeli
+        if (min_front < min_back && min_front < kThreshold) {
+          std::reverse(A.path_xy.begin(), A.path_xy.end());
+          recalcGoal(A);
+        }
+      }
+    }
+
+    // Ortadaki ve son segmentler: önceki segment'in çıkışına göre yönlendir
+    for (size_t i = 1; i < route.size(); ++i) {
+      const auto& prev_seg = route[i - 1];
+      auto& cur = route[i];
+
+      if (prev_seg.path_xy.empty() || cur.path_xy.empty()) continue;
+
+      const auto& prev_exit = prev_seg.path_xy.back();
+
+      double d_front = endpointDist(cur.path_xy.front(), prev_exit);
+      double d_back  = endpointDist(cur.path_xy.back(), prev_exit);
+
+      // Önceki segment'in çıkışı cur'un giriş noktası olmalı
+      // Eğer cur'un sonu daha yakınsa → cur ters çevrilmeli
+      if (d_back < d_front) {
+        std::reverse(cur.path_xy.begin(), cur.path_xy.end());
+        recalcGoal(cur);
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────────
+  // Segment'in goal_x/goal_y/goal_yaw'ını path_xy'den yeniden hesapla
+  // ──────────────────────────────────────────────
+  static void recalcGoal(Segment& seg) {
+    if (seg.path_xy.empty()) return;
+    seg.goal_x = seg.path_xy.back().first;
+    seg.goal_y = seg.path_xy.back().second;
+    if (seg.path_xy.size() >= 2) {
+      auto& p1 = seg.path_xy[seg.path_xy.size() - 2];
+      auto& p2 = seg.path_xy[seg.path_xy.size() - 1];
+      seg.goal_yaw = std::atan2(p2.second - p1.second,
+                                 p2.first - p1.first);
+    }
   }
 };
 

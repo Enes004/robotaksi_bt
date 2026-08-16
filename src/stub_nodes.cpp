@@ -16,23 +16,105 @@ namespace robotaksi_bt {
 BT::NodeStatus LoadMission::tick()
 {
   if (!graph_loaded_) {
-    const std::string yaml_file = "config/harita.yaml";
-    const std::string geojson_file = "config/lanelet_layer.geojson";
+    const std::string lanelet_file = "config/lanelet_layer.geojson";
+    const std::string linestring_file = "config/linestring_layer.geojson";
 
-    if (!graph_.loadFromYAML(yaml_file)) {
-      RCLCPP_ERROR(btLogger(), "LoadMission: Harita YAML yüklenemedi: %s", yaml_file.c_str());
+    if (!graph_.loadFromGeoJSON(lanelet_file, linestring_file)) {
+      RCLCPP_ERROR(btLogger(), "LoadMission: GeoJSON harita yüklenemedi!");
       return BT::NodeStatus::FAILURE;
-    }
-
-    if (!graph_.loadTypesFromGeoJSON(geojson_file)) {
-      RCLCPP_WARN(btLogger(), "LoadMission: Lanelet GeoJSON yüklenemedi: %s", geojson_file.c_str());
     }
 
     graph_loaded_ = true;
   }
 
-  // TODO: mission_json'dan waypoint okuma henüz yapılmadı
-  auto route = graph_.planRoute({"4", "10", "16"});
+  // ── GeoJSON'dan waypoint okuma ──────────────────────────────────────────
+  // geojson_file portu: mission JSON dosya yolu (opsiyonel).
+  // Boşsa veya dosya açılamazsa eski sabit test rotasına fallback yapılır.
+  std::vector<std::string> waypoint_ids;
+  std::string mission_json_path;
+  getInput("geojson_file", mission_json_path);
+
+  if (mission_json_path.empty()) {
+    // Fallback: port verilmemiş
+    RCLCPP_WARN(btLogger(),
+      "LoadMission: 'geojson_file' portu boş — mission_json verilmedi, test rotası kullanılıyor");
+  } else {
+    bool parse_ok = false;
+    std::ifstream mf(mission_json_path);
+    if (!mf.is_open()) {
+      RCLCPP_WARN(btLogger(),
+        "LoadMission: Mission JSON açılamadı: %s — test rotası kullanılıyor",
+        mission_json_path.c_str());
+    } else {
+      try {
+        nlohmann::json mj;
+        mf >> mj;
+        if (mj.contains("features") && mj["features"].is_array() &&
+            !mj["features"].empty())
+        {
+          for (const auto& feat : mj["features"]) {
+            // geometry.coordinates: [lon, lat]
+            if (!feat.contains("geometry")) continue;
+            const auto& geom = feat["geometry"];
+            if (!geom.contains("coordinates") ||
+                !geom["coordinates"].is_array() ||
+                geom["coordinates"].size() < 2) continue;
+
+            double lon = geom["coordinates"][0].get<double>();
+            double lat = geom["coordinates"][1].get<double>();
+
+            // Equirectangular projeksiyon (namespace-level yardımcılar)
+            double x = lonToMeters(lon);
+            double y = latToMeters(lat);
+
+            // En yakın graf düğümünü bul
+            std::string nid = graph_.findNearestNode(x, y);
+            if (!nid.empty()) {
+              waypoint_ids.push_back(nid);
+            }
+          }
+          if (!waypoint_ids.empty()) {
+            parse_ok = true;
+            RCLCPP_INFO(btLogger(),
+              "LoadMission: Mission JSON'dan %zu waypoint yüklendi (%s)",
+              waypoint_ids.size(), mission_json_path.c_str());
+          } else {
+            RCLCPP_WARN(btLogger(),
+              "LoadMission: Mission JSON features boş veya eşleşme yok — test rotası kullanılıyor");
+          }
+        } else {
+          RCLCPP_WARN(btLogger(),
+            "LoadMission: Mission JSON 'features' listesi boş/eksik — test rotası kullanılıyor");
+        }
+      } catch (const nlohmann::json::exception& e) {
+        RCLCPP_WARN(btLogger(),
+          "LoadMission: Mission JSON parse hatası: %s — test rotası kullanılıyor", e.what());
+      }
+    }
+
+    if (!parse_ok) {
+      waypoint_ids.clear();  // fallback'e düşülecek
+    }
+  }
+
+  // Fallback: geojson yoksa ya da parse başarısızsa sabit test rotası
+  if (waypoint_ids.empty()) {
+    waypoint_ids = {"4", "10", "16"};
+  }
+
+  // GÖREV 1 — Teşhis: bulunan waypoint id'lerini logla
+  {
+    std::string ids_str;
+    for (auto& id : waypoint_ids) ids_str += id + " ";
+    RCLCPP_INFO(btLogger(), "LoadMission: bulunan waypoint id'leri: %s", ids_str.c_str());
+  }
+
+  // GÖREV 2 — İki kademeli rota denemesi
+  auto route = graph_.planRoute(waypoint_ids);
+  if (route.empty()) {
+    RCLCPP_WARN(btLogger(), "LoadMission: mission_json rotası boş, sabit test rotasına düşülüyor");
+    route = graph_.planRoute({"4", "10", "16"});
+  }
   if (route.empty()) {
     RCLCPP_ERROR(btLogger(), "LoadMission: Rota planlama başarısız veya rota boş!");
     return BT::NodeStatus::FAILURE;
@@ -114,12 +196,6 @@ BT::NodeStatus FindParkingSlot::tick()
 // Condition stub'ları FAILURE döner = "tehlike yok"
 // SafetyReflexes'te Inverter ile SUCCESS'a çevrilir → devam et
 
-BT::NodeStatus EmergencyStopRequested::tick()
-{
-  // TODO: /emergency_stop (Bool) topic'ini subscribe et
-  return BT::NodeStatus::FAILURE;
-}
-
 BT::NodeStatus PedestrianAhead::tick()
 {
   // TODO: /perception/pedestrian (Bool) topic'ini subscribe et
@@ -198,7 +274,7 @@ BT::NodeStatus CheckStopAccuracy::tick()
 
   // Hedef noktayı "x;y;yaw" formatından parse et
   std::string point_str;
-  if (!getInput("point", point_str) || point_str.empty()) {
+  if (!globalRootBlackboard()->get("seg_goal", point_str) || point_str.empty()) {
     RCLCPP_ERROR(btLogger(), "CheckStopAccuracy: 'point' portu boş!");
     return BT::NodeStatus::FAILURE;
   }
@@ -293,7 +369,7 @@ BT::NodeStatus IsStuck::tick()
 
 BT::NodeStatus FollowLaneSegment::onStart()
 {
-  std::string goal; getInput("goal", goal);
+  std::string goal; globalRootBlackboard()->get("seg_goal", goal);
   RCLCPP_INFO(btLogger(), "FollowLaneSegment: STUB START goal=%s", goal.c_str());
   // TODO: Nav2 NavigateToPose action client başlat
   start_time_ = std::chrono::steady_clock::now();
@@ -340,18 +416,6 @@ BT::NodeStatus WaitForGreenLight::onRunning()
   return BT::NodeStatus::SUCCESS;  // Stub: hemen yeşil
 }
 void WaitForGreenLight::onHalted() { RCLCPP_WARN(btLogger(), "WaitForGreenLight: HALTED"); }
-
-BT::NodeStatus WaitForGoSignal::onStart()
-{
-  RCLCPP_INFO(btLogger(), "WaitForGoSignal: STUB UMS-2 bekleniyor");
-  return BT::NodeStatus::RUNNING;
-}
-BT::NodeStatus WaitForGoSignal::onRunning()
-{
-  // TODO: /mission/go_signal (Bool) subscribe et
-  return BT::NodeStatus::SUCCESS;  // Stub: hemen başlat
-}
-void WaitForGoSignal::onHalted() { RCLCPP_WARN(btLogger(), "WaitForGoSignal: HALTED"); }
 
 BT::NodeStatus ProceedOnGreen::tick()
 {

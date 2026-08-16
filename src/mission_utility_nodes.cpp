@@ -20,13 +20,13 @@ BT::NodeStatus RecordMissionPoint::tick()
 {
   std::string point;
   double tolerance = 1.0;
-  getInput("point", point);
+  globalRootBlackboard()->get("seg_goal", point);
   getInput("tolerance", tolerance);
 
   // Sayaç artır
   int count = 0;
-  config().blackboard->get("mission_points_reached", count);
-  config().blackboard->set("mission_points_reached", count + 1);
+  globalRootBlackboard()->get("mission_points_reached", count);
+  globalRootBlackboard()->set("mission_points_reached", count + 1);
 
   RCLCPP_INFO(btLogger(), "RecordMissionPoint: nokta=%s, toplam=%d",
               point.c_str(), count + 1);
@@ -56,7 +56,7 @@ BT::NodeStatus RecordParkEntryReached::tick()
 BT::NodeStatus SignalPassengerEvent::tick()
 {
   std::string event_type;
-  if (!getInput("event_type", event_type)) {
+  if (!globalRootBlackboard()->get("seg_meta", event_type) || event_type.empty()) {
     RCLCPP_ERROR(btLogger(), "SignalPassengerEvent: 'event_type' okunamadı!");
     return BT::NodeStatus::FAILURE;
   }

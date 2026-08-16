@@ -28,9 +28,6 @@
       <LoadMission geojson_file="{geojson_file}" tour="{tour}"
                    route="{route}" route_size="{route_size}" seg_index="{seg_index}" />
 
-      <!-- UMS-2 Go sinyali bekle (şartname sf.8) -->
-      <WaitForGoSignal />
-
       <Fallback name="DriveWithRecovery">
         <SubTree ID="DriveAllSegments" _autoremap="true" />
         <SubTree ID="Recovery"         _autoremap="true" />
@@ -107,12 +104,6 @@
        Katman 5-7: Tur≥2 kapılı (ışık/tabela Tur 1'de sahada yok) -->
   <BehaviorTree ID="SafetyReflexes">
     <ReactiveSequence name="SafetyReflexes">
-
-      <!-- K1: Acil durdurma (UMS-1) — her turda -->
-      <Fallback>
-        <Inverter><EmergencyStopRequested /></Inverter>
-        <KeepRunningUntilFailure><StopVehicle /></KeepRunningUntilFailure>
-      </Fallback>
 
       <!-- K2: Fiziksel yaya — her turda -->
       <Fallback>
@@ -365,7 +356,7 @@
       <inout_port name="seg_index" type="int" />
     </Action>
     <Action ID="ClearHandledFlags" />
-    <Action ID="WaitForGoSignal" />
+
     <Action ID="SetMaxSpeed">
       <input_port name="speed" type="double" />
     </Action>
@@ -446,7 +437,7 @@
     <Condition ID="IsTrafficControlActive">
       <input_port name="tour" type="int" />
     </Condition>
-    <Condition ID="EmergencyStopRequested" />
+
     <Condition ID="PedestrianAhead">
       <input_port name="detected" type="bool" />
     </Condition>

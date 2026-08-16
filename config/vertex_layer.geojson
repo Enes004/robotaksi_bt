@@ -1,0 +1,16 @@
+{
+"type": "FeatureCollection",
+"name": "vertex_layer",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "fid": 981, "vertex_id": 17, "point_type": "regulatory_vertex", "sign_type": null, "regulation_type": "parking_spot" }, "geometry": { "type": "MultiPoint", "coordinates": [ [ 29.509182191702656, 40.79037320627797 ] ] } },
+{ "type": "Feature", "properties": { "fid": 982, "vertex_id": 16, "point_type": "regulatory_vertex", "sign_type": null, "regulation_type": "parking_spot" }, "geometry": { "type": "MultiPoint", "coordinates": [ [ 29.509200245881416, 40.790358038284687 ] ] } },
+{ "type": "Feature", "properties": { "fid": 983, "vertex_id": 18, "point_type": "regulatory_vertex", "sign_type": null, "regulation_type": "parking_spot" }, "geometry": { "type": "MultiPoint", "coordinates": [ [ 29.509219910345418, 40.790341308411868 ] ] } },
+{ "type": "Feature", "properties": { "fid": 984, "vertex_id": 11, "point_type": "regulatory_vertex", "sign_type": null, "regulation_type": "parking_spot" }, "geometry": { "type": "MultiPoint", "coordinates": [ [ 29.509240578868464, 40.790323805842817 ] ] } },
+{ "type": "Feature", "properties": { "fid": 985, "vertex_id": 10, "point_type": "regulatory_vertex", "sign_type": null, "regulation_type": "parking_spot" }, "geometry": { "type": "MultiPoint", "coordinates": [ [ 29.509262380657674, 40.79030627650377 ] ] } },
+{ "type": "Feature", "properties": { "fid": 986, "vertex_id": 13, "point_type": "regulatory_vertex", "sign_type": null, "regulation_type": "parking_spot" }, "geometry": { "type": "MultiPoint", "coordinates": [ [ 29.509279950211944, 40.790286925955108 ] ] } },
+{ "type": "Feature", "properties": { "fid": 987, "vertex_id": 12, "point_type": "regulatory_vertex", "sign_type": null, "regulation_type": "parking_spot" }, "geometry": { "type": "MultiPoint", "coordinates": [ [ 29.509299601992179, 40.790269626203731 ] ] } },
+{ "type": "Feature", "properties": { "fid": 988, "vertex_id": 15, "point_type": "regulatory_vertex", "sign_type": null, "regulation_type": "parking_spot" }, "geometry": { "type": "MultiPoint", "coordinates": [ [ 29.509320304936804, 40.790250394813796 ] ] } },
+{ "type": "Feature", "properties": { "fid": 989, "vertex_id": 14, "point_type": "regulatory_vertex", "sign_type": null, "regulation_type": "parking_spot" }, "geometry": { "type": "MultiPoint", "coordinates": [ [ 29.509340067354699, 40.790233630565588 ] ] } }
+]
+}
