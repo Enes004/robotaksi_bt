@@ -16,6 +16,8 @@ find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(nav2_msgs REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
@@ -42,9 +44,11 @@ target_include_directories(segment_bt_nodes PUBLIC
 ament_target_dependencies(segment_bt_nodes
   behaviortree_cpp_v3
   rclcpp
+  rclcpp_action
   geometry_msgs
   std_msgs
   nav_msgs
+  nav2_msgs
   tf2
   tf2_geometry_msgs
 )
@@ -65,9 +69,11 @@ target_link_libraries(bt_test
 ament_target_dependencies(bt_test
   behaviortree_cpp_v3
   rclcpp
+  rclcpp_action
   geometry_msgs
   std_msgs
   nav_msgs
+  nav2_msgs
   tf2
   tf2_geometry_msgs
 )
@@ -99,5 +105,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_robotaksi_bt_nodes HAS_LIBRARY_TARGET)
-ament_export_dependencies(behaviortree_cpp_v3 rclcpp geometry_msgs std_msgs nav_msgs tf2 tf2_geometry_msgs nlohmann_json)
+ament_export_dependencies(behaviortree_cpp_v3 rclcpp rclcpp_action geometry_msgs std_msgs nav_msgs nav2_msgs tf2 tf2_geometry_msgs nlohmann_json)
 ament_package()

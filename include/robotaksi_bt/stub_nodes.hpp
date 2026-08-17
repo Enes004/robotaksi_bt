@@ -20,6 +20,9 @@
 #include "behaviortree_cpp_v3/action_node.h"
 #include "behaviortree_cpp_v3/condition_node.h"
 #include "robotaksi_bt/segment_graph.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
+#include "nav2_msgs/action/navigate_to_pose.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include <string>
 #include <chrono>
 
@@ -182,15 +185,25 @@ private:
 
 class FollowLaneSegment : public BT::StatefulActionNode {
 public:
-  FollowLaneSegment(const std::string& n, const BT::NodeConfiguration& c) : BT::StatefulActionNode(n,c) {}
+  FollowLaneSegment(const std::string& n, const BT::NodeConfiguration& c)
+    : BT::StatefulActionNode(n, c) {}
   static BT::PortsList providedPorts() {
     return { BT::InputPort<std::string>("goal"), BT::InputPort<double>("max_speed", "0") };
   }
-  BT::NodeStatus onStart() override;
+  BT::NodeStatus onStart()   override;
   BT::NodeStatus onRunning() override;
-  void onHalted() override;
+  void           onHalted()  override;
 private:
-  std::chrono::steady_clock::time_point start_time_;
+  using NavigateToPose = nav2_msgs::action::NavigateToPose;
+  using GoalHandle     = rclcpp_action::ClientGoalHandle<NavigateToPose>;
+
+  rclcpp_action::Client<NavigateToPose>::SharedPtr action_client_;
+  std::shared_future<GoalHandle::SharedPtr>        goal_handle_future_;
+  GoalHandle::SharedPtr                            goal_handle_;
+
+  bool goal_sent_      = false;
+  bool goal_finished_  = false;
+  bool goal_succeeded_ = false;
 };
 
 class WaitForClear : public BT::StatefulActionNode {

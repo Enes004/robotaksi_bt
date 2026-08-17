@@ -495,28 +495,126 @@ BT::NodeStatus IsStuck::tick()
   return BT::NodeStatus::FAILURE;
 }
 
-// ═══════════════ ⚡ NAV2/HAREKET BAĞIMLI STUB'LAR ═══════════════
+// ═══════════════ ⚡ NAV2/HAREKET BAĞIMLI ═══════════════
 
 BT::NodeStatus FollowLaneSegment::onStart()
 {
-  std::string goal; globalRootBlackboard()->get("seg_goal", goal);
-  RCLCPP_INFO(btLogger(), "FollowLaneSegment: STUB START goal=%s", goal.c_str());
-  // TODO: Nav2 NavigateToPose action client başlat
-  start_time_ = std::chrono::steady_clock::now();
+  // ── 1. "goal" portunu oku ve parse et ────────────────────────────────────
+  std::string goal_str;
+  if (!getInput("goal", goal_str) || goal_str.empty()) {
+    // port bağlı değilse kök blackboard'dan dene
+    if (!globalRootBlackboard()->get("seg_goal", goal_str) || goal_str.empty()) {
+      RCLCPP_ERROR(btLogger(), "FollowLaneSegment: 'goal' portu/blackboard boş!");
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+
+  double x = 0.0, y = 0.0, yaw = 0.0;
+  try {
+    size_t pos1 = 0, pos2 = 0;
+    x   = std::stod(goal_str, &pos1);               // ilk sayı
+    pos1++;                                           // ';' atla
+    y   = std::stod(goal_str.substr(pos1), &pos2);   // ikinci sayı
+    pos1 += pos2 + 1;                                 // ';' atla
+    yaw = std::stod(goal_str.substr(pos1));           // üçüncü sayı
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(btLogger(),
+      "FollowLaneSegment: goal parse hatası '%s': %s", goal_str.c_str(), e.what());
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // ── 2. Lazy-init: action client ──────────────────────────────────────────
+  auto ros = getRosNode(config());
+  if (!ros) return BT::NodeStatus::FAILURE;
+
+  if (!action_client_) {
+    action_client_ = rclcpp_action::create_client<NavigateToPose>(ros, "navigate_to_pose");
+  }
+
+  // ── 3. Action server hazır mı? ────────────────────────────────────────────
+  if (!action_client_->wait_for_action_server(std::chrono::seconds(10))) {
+    RCLCPP_ERROR(btLogger(),
+      "FollowLaneSegment: Nav2 navigate_to_pose action server bulunamadı, "
+      "Nav2 sistemi çalışıyor mu kontrol edin");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // ── 4. Goal mesajı oluştur ───────────────────────────────────────────────
+  NavigateToPose::Goal nav_goal;
+  nav_goal.pose.header.frame_id = "map";
+  nav_goal.pose.header.stamp    = ros->now();
+  nav_goal.pose.pose.position.x = x;
+  nav_goal.pose.pose.position.y = y;
+  nav_goal.pose.pose.position.z = 0.0;
+
+  tf2::Quaternion q;
+  q.setRPY(0.0, 0.0, yaw);
+  nav_goal.pose.pose.orientation = tf2::toMsg(q);
+
+  // ── 5. Goal gönder, result callback bağla ───────────────────────────────
+  goal_finished_  = false;
+  goal_succeeded_ = false;
+  goal_handle_    = nullptr;
+
+  rclcpp_action::Client<NavigateToPose>::SendGoalOptions opts;
+
+  opts.goal_response_callback =
+    [this](const GoalHandle::SharedPtr& handle) {
+      goal_handle_ = handle;
+      if (!handle) {
+        RCLCPP_ERROR(btLogger(), "FollowLaneSegment: Nav2 goal REDDEDİLDİ!");
+        goal_finished_  = true;
+        goal_succeeded_ = false;
+      }
+    };
+
+  opts.result_callback =
+    [this](const GoalHandle::WrappedResult& result) {
+      goal_finished_  = true;
+      goal_succeeded_ = (result.code == rclcpp_action::ResultCode::SUCCEEDED);
+    };
+
+  goal_handle_future_ = action_client_->async_send_goal(nav_goal, opts);
+  goal_sent_ = true;
+
+  RCLCPP_INFO(btLogger(),
+    "FollowLaneSegment: NavigateToPose hedefi gönderildi x=%.2f y=%.2f yaw=%.2f",
+    x, y, yaw);
+
   return BT::NodeStatus::RUNNING;
 }
+
 BT::NodeStatus FollowLaneSegment::onRunning()
 {
-  auto elapsed = std::chrono::steady_clock::now() - start_time_;
-  if (elapsed > std::chrono::seconds(2)) {
-    RCLCPP_INFO(btLogger(), "FollowLaneSegment: STUB tamamlandı");
-    return BT::NodeStatus::SUCCESS;
+  // Callback'lerin işlenmesi için spin_some (ana döngü de yapıyor, ama güvenli)
+  auto ros = getRosNode(config());
+  if (ros) rclcpp::spin_some(ros);
+
+  if (goal_finished_) {
+    if (goal_succeeded_) {
+      RCLCPP_INFO(btLogger(), "FollowLaneSegment: Nav2 hedefe ulaşıldı → SUCCESS");
+      return BT::NodeStatus::SUCCESS;
+    } else {
+      RCLCPP_ERROR(btLogger(), "FollowLaneSegment: Nav2 hedefe ulaşamadı → FAILURE");
+      return BT::NodeStatus::FAILURE;
+    }
   }
+
   return BT::NodeStatus::RUNNING;
 }
+
 void FollowLaneSegment::onHalted()
 {
-  RCLCPP_WARN(btLogger(), "FollowLaneSegment: HALTED");
+  if (goal_handle_ && action_client_) {
+    action_client_->async_cancel_goal(goal_handle_);
+    RCLCPP_WARN(btLogger(),
+      "FollowLaneSegment: HALTED — Nav2 goal iptal edildi (async_cancel_goal)");
+  } else {
+    RCLCPP_WARN(btLogger(), "FollowLaneSegment: HALTED (henüz goal handle yok)");
+  }
+  goal_sent_      = false;
+  goal_finished_  = false;
+  goal_succeeded_ = false;
 }
 
 BT::NodeStatus WaitForClear::onStart()

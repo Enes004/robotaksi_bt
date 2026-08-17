@@ -69,8 +69,7 @@ public:
 
   static BT::PortsList providedPorts() {
     return {
-      BT::InputPort<double>("hold_sec", 0.0,
-        "0 → anlık dur+SUCCESS (varsayılan);  >0 → o kadar saniye sürekli dur komutu gönder")
+      BT::InputPort<double>("hold_sec")
     };
   }
 
