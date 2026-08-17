@@ -39,8 +39,7 @@ public:
   }
   BT::NodeStatus tick() override;
 private:
-  SegmentGraph graph_;
-  bool graph_loaded_ = false;  // dosyalar sadece ilk tick'te yüklensin
+  bool graph_loaded_ = false;  // dosyalar sadece ilk tick'te yüklensin (globalSegmentGraph)
 };
 
 class GetCurrentSegment : public BT::SyncActionNode {

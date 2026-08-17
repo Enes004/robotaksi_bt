@@ -1,0 +1,20 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"name": "start", "description": "Araç başlangıç konumu", "nokta_id": 0},
+      "geometry": {"type": "Point", "coordinates": [29.509014, 40.790343]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "yolcu_durak", "description": "Yolcu durağı", "nokta_id": 0},
+      "geometry": {"type": "Point", "coordinates": [29.509010, 40.789973]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "park_giris", "description": "Araç otopark giriş bölgesi noktası", "nokta_id": 0},
+      "geometry": {"type": "Point", "coordinates": [29.509223, 40.790149]}
+    }
+  ]
+}

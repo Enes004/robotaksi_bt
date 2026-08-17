@@ -76,6 +76,13 @@ int main(int argc, char **argv)
         tour_val,
         mission_json_val.empty() ? "(belirtilmedi)" : mission_json_val.c_str());
 
+      // ── mission_json boşsa başlamadan önce belirgin uyarı bas ──
+      if (mission_json_val.empty()) {
+        RCLCPP_WARN(ros_node->get_logger(),
+          "mission_json parametresi verilmedi — LoadMission sabit test rotasını"
+          " kullanacak. Gerçek görev için: --ros-args -p mission_json:=/yol/gorev.geojson");
+      }
+
       std::cout << "\n✅ XML başarıyla yüklendi!" << std::endl;
       std::cout << "   Kayıtlı node sayısı: " << factory.manifests().size() << std::endl;
 
@@ -95,6 +102,24 @@ int main(int argc, char **argv)
         // 3. Rate'e uy (20 Hz)
         rate.sleep();
       }
+
+      // ── Fallback rota kullanıldıysa belirgin uyarı ──────────────────────
+      {
+        bool used_fallback = false;
+        tree.rootBlackboard()->get("using_fallback_route", used_fallback);
+        if (used_fallback) {
+          std::cerr << "\n";
+          std::cerr << "⚠️  ⚠️  ⚠️  UYARI: GERÇEK GÖREV ROTASI BULUNAMADI  ⚠️  ⚠️  ⚠️\n";
+          std::cerr << "    Sistem SABİT TEST ROTASINA düştü, gerçek mission_json\n";
+          std::cerr << "    rotası KULLANILMADI. Harita/koordinat eşleşmesini kontrol edin.\n";
+          std::cerr << "\n";
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
+      // ── Segment özet raporu ──────────────────────────────────────────────
+      robotaksi_bt::RunStats::instance().print();
+      // ────────────────────────────────────────────────────────────────────
 
       std::cout << "\n--- BT döngüsü bitti ---" << std::endl;
       std::cout << "Son sonuç: " << BT::toStr(result) << std::endl;

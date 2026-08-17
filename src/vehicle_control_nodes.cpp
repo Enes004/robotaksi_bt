@@ -75,32 +75,79 @@ BT::NodeStatus SetMaxSpeed::tick()
 }
 
 // ═══════════════════════════════════════════════════════════════
-// StopVehicle::tick()
+// StopVehicle — StatefulActionNode implementasyonu
 //
-// /cmd_vel topic'ine sıfır Twist mesajı yayınlar.
-// geometry_msgs::msg::Twist varsayılan olarak tüm alanları 0.0'dır.
-//
-// NOT: Bu node "dur komutu gönder" demektir.
-//      Aracın GERÇEKTEN durduğunu doğrulamak CheckStopAccuracy'nin işidir.
-//      Fiziksel gecikme olabilir (fren mesafesi, ivme).
+// publishZeroVel(): publisher lazy-init + sıfır Twist yayını
+// onStart():   hold_sec oku, zamanlayıcı başlat, bir kez yayınla
+//              hold_sec<=0 → anında SUCCESS (eski SyncAction gibi)
+//              hold_sec>0  → RUNNING (sürekli yayın moduna geç)
+// onRunning(): her tick'te tekrar yayınla
+//              süre dolduysa SUCCESS, dolmadıysa RUNNING
+// onHalted():  log
 // ═══════════════════════════════════════════════════════════════
-BT::NodeStatus StopVehicle::tick()
+
+void StopVehicle::publishZeroVel()
 {
-  // Lazy-init: publisher'ı ilk tick'te oluştur
+  // Lazy-init: publisher ilk çağrıda oluşturulur, sonra tekrar kullanılır
   if (!pub_) {
     auto ros = getRosNode(config());
     if (ros) {
-      pub_ = ros->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+      pub_ = ros->create_publisher<geometry_msgs::msg::Twist>(kCmdVelTopic, 10);
     }
   }
   if (pub_) {
     geometry_msgs::msg::Twist zero_vel;
-    // Twist() varsayılan olarak tüm alanlar 0.0 — tam durma
+    // Twist() varsayılan: tüm alanlar 0.0 — tam durma
     pub_->publish(zero_vel);
   }
+}
 
-  RCLCPP_INFO(btLogger(), "StopVehicle: /cmd_vel sıfırlandı");
-  return BT::NodeStatus::SUCCESS;
+BT::NodeStatus StopVehicle::onStart()
+{
+  // hold_sec portunu oku (varsayılan 0.0)
+  hold_sec_ = 0.0;
+  getInput("hold_sec", hold_sec_);
+
+  // Zamanlayıcıyı her seferinde sıfırla
+  start_time_ = std::chrono::steady_clock::now();
+
+  // Her iki modda da ilk dur komutunu hemen gönder
+  publishZeroVel();
+
+  if (hold_sec_ <= 0.0) {
+    // ANLÂTIK MOD — eski SyncAction davranışı
+    // Sequence bir sonraki node'a (CheckStopAccuracy, Dwell...) geçebilir
+    RCLCPP_INFO(btLogger(), "StopVehicle: %s sıfırlandı → SUCCESS (anlık)", kCmdVelTopic);
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  // TUTMA MODU — hold_sec boyunca sürekli yayın yapılacak
+  RCLCPP_INFO(btLogger(), "StopVehicle: %s sıfırlandı → RUNNING (%.1f sn tutma)",
+              kCmdVelTopic, hold_sec_);
+  return BT::NodeStatus::RUNNING;
+}
+
+BT::NodeStatus StopVehicle::onRunning()
+{
+  // Sürekli sıfır Twist yayınla (~20 Hz BT tick hızıyla)
+  publishZeroVel();
+
+  double elapsed = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - start_time_).count();
+
+  if (elapsed >= hold_sec_) {
+    RCLCPP_INFO(btLogger(), "StopVehicle: %.1f sn tutma tamamlandı → SUCCESS", elapsed);
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  return BT::NodeStatus::RUNNING;
+}
+
+void StopVehicle::onHalted()
+{
+  RCLCPP_WARN(btLogger(), "StopVehicle: HALTED (%.1f / %.1f sn)",
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_).count(),
+    hold_sec_);
 }
 
 // ═══════════════════════════════════════════════════════════════

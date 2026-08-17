@@ -19,7 +19,7 @@ BT::NodeStatus LoadMission::tick()
     const std::string lanelet_file = "config/lanelet_layer.geojson";
     const std::string linestring_file = "config/linestring_layer.geojson";
 
-    if (!graph_.loadFromGeoJSON(lanelet_file, linestring_file)) {
+    if (!globalSegmentGraph().loadFromGeoJSON(lanelet_file, linestring_file)) {
       RCLCPP_ERROR(btLogger(), "LoadMission: GeoJSON harita yüklenemedi!");
       return BT::NodeStatus::FAILURE;
     }
@@ -35,9 +35,12 @@ BT::NodeStatus LoadMission::tick()
   getInput("geojson_file", mission_json_path);
 
   if (mission_json_path.empty()) {
-    // Fallback: port verilmemiş
+    // BİLİNÇLİ TEST MODU: geojson_file parametresi verilmemiş.
+    // Bu durum normal geliştirme akışında beklenen bir seçimdir;
+    // using_fallback_route flag'i burada set edilmez (ayrı izleme gereksiz).
     RCLCPP_WARN(btLogger(),
-      "LoadMission: 'geojson_file' portu boş — mission_json verilmedi, test rotası kullanılıyor");
+      "LoadMission: 'geojson_file' portu boş — mission_json parametresi verilmedi,"
+      " sabit test rotası kullanılacak (bilinçli test modu)");
   } else {
     bool parse_ok = false;
     std::ifstream mf(mission_json_path);
@@ -68,19 +71,22 @@ BT::NodeStatus LoadMission::tick()
             double y = latToMeters(lat);
 
             // En yakın graf düğümünü bul
-            std::string nid = graph_.findNearestNode(x, y);
+            std::string nid = globalSegmentGraph().findNearestNode(x, y);
             if (!nid.empty()) {
               waypoint_ids.push_back(nid);
             }
           }
           if (!waypoint_ids.empty()) {
             parse_ok = true;
+            // Gerçek rota başarıyla yüklendi — fallback flag'ini temizle
+            globalRootBlackboard()->set("using_fallback_route", false);
             RCLCPP_INFO(btLogger(),
               "LoadMission: Mission JSON'dan %zu waypoint yüklendi (%s)",
               waypoint_ids.size(), mission_json_path.c_str());
           } else {
-            RCLCPP_WARN(btLogger(),
-              "LoadMission: Mission JSON features boş veya eşleşme yok — test rotası kullanılıyor");
+            RCLCPP_ERROR(btLogger(),
+              "LoadMission: Mission JSON features boş veya haritayla eşleşme yok!"
+              " Koordinat/harita uyuşmazlığı olabilir. Sabit test rotasına düşülüyor.");
           }
         } else {
           RCLCPP_WARN(btLogger(),
@@ -110,10 +116,19 @@ BT::NodeStatus LoadMission::tick()
   }
 
   // GÖREV 2 — İki kademeli rota denemesi
-  auto route = graph_.planRoute(waypoint_ids);
+  auto route = globalSegmentGraph().planRoute(waypoint_ids);
   if (route.empty()) {
-    RCLCPP_WARN(btLogger(), "LoadMission: mission_json rotası boş, sabit test rotasına düşülüyor");
-    route = graph_.planRoute({"4", "10", "16"});
+    // ── FALLBACK ETKİNLEŞTİ ─────────────────────────────────────────────────
+    // planRoute() boş döndü: harita bağlantı sorunu veya yanlış koordinat
+    // eşleşmesi olabilir. Fallback mekanizması korunuyor (BT çökmemeli)
+    // ama SESSIZ GEÇMEMELI — her ikisi de uyarılmalı.
+    RCLCPP_ERROR(btLogger(),
+      "LoadMission: mission_json rotası BOŞ döndü! (harita bağlantı sorunu veya"
+      " koordinat eşleşme hatası). SABİT TEST ROTASINA ({\"4\",\"10\",\"16\"})"
+      " düşülüyor — lütfen harita ve mission_json koordinatlarını kontrol edin!");
+    globalRootBlackboard()->set("using_fallback_route", true);
+    route = globalSegmentGraph().planRoute({"4", "10", "16"});
+    // ────────────────────────────────────────────────────────────────────────
   }
   if (route.empty()) {
     RCLCPP_ERROR(btLogger(), "LoadMission: Rota planlama başarısız veya rota boş!");
@@ -161,17 +176,132 @@ BT::NodeStatus GetCurrentSegment::tick()
 
   globalRootBlackboard()->set("seg_meta", segment.meta);
 
+  // ── Planlanan Dönüş Hesabı ─────────────────────────────────────────────
+  // path_xy'den giriş ve çıkış yönleri hesaplanır:
+  //   giriş açısı : path[0]  → path[1]   arası atan2
+  //   çıkış açısı : path[-2] → path[-1]  arası atan2
+  //   fark (-180/+180 normalize): |fark| < 25° → STRAIGHT
+  //                               fark > 0     → LEFT
+  //                               fark < 0     → RIGHT
+  // path_xy < 2 nokta ise STRAIGHT varsayılanı kullanılır.
+  {
+    std::string turn_str = "STRAIGHT";  // varsayılan
+
+    const auto& path = segment.path_xy;
+    if (path.size() >= 2) {
+      // Giriş açısı: ilk iki nokta
+      double entry_angle = std::atan2(
+        path[1].second - path[0].second,
+        path[1].first  - path[0].first);
+
+      // Çıkış açısı: son iki nokta
+      size_t n = path.size();
+      double exit_angle = std::atan2(
+        path[n - 1].second - path[n - 2].second,
+        path[n - 1].first  - path[n - 2].first);
+
+      // Fark (radyan → derece, -180/+180 aralığına normalize)
+      double diff_deg = (exit_angle - entry_angle) * 180.0 / M_PI;
+      while (diff_deg >  180.0) diff_deg -= 360.0;
+      while (diff_deg < -180.0) diff_deg += 360.0;
+
+      if (std::fabs(diff_deg) < 25.0) {
+        turn_str = "STRAIGHT";
+      } else if (diff_deg > 0.0) {
+        turn_str = "LEFT";
+      } else {
+        turn_str = "RIGHT";
+      }
+    }
+
+    globalRootBlackboard()->set("planned_turn", turn_str);
+    RCLCPP_DEBUG(btLogger(),
+      "GetCurrentSegment: seg_index=%d → planned_turn=%s (path_xy nokta sayısı: %zu)",
+      seg_index, turn_str.c_str(), segment.path_xy.size());
+  }
+  // ──────────────────────────────────────────────────────────────────────────
+
   return BT::NodeStatus::SUCCESS;
 }
 
 BT::NodeStatus ReplanRoute::tick()
 {
-  std::string reason; getInput("reason", reason);
-  RCLCPP_WARN(btLogger(), "ReplanRoute: STUB sebep=%s", reason.c_str());
-  // TODO: Mevcut pozisyondan yeni Dijkstra rotası hesapla
-  // Kök blackboard'a yaz — SubTree autoremap sınırını aşar
-  globalRootBlackboard()->set("route_size", 0);
-  globalRootBlackboard()->set("seg_index", 0);
+  std::string reason;
+  getInput("reason", reason);
+
+  // ── Adım 1: Mevcut konumu belirle ─────────────────────────────────────
+  // Önce OdometryProvider'dan gerçek konum dene,
+  // başarısız olursa blackboard'daki seg_goal'dan parse et.
+  double cur_x = 0.0, cur_y = 0.0, cur_yaw = 0.0;
+  bool pose_ok = OdometryProvider::instance().getPose(cur_x, cur_y, cur_yaw);
+
+  if (!pose_ok) {
+    // Odometry yok — son bilinen segment hedefini kullan
+    std::string seg_goal_str;
+    if (globalRootBlackboard()->get("seg_goal", seg_goal_str) && !seg_goal_str.empty()) {
+      std::istringstream iss(seg_goal_str);
+      char delim;
+      if (iss >> cur_x >> delim >> cur_y >> delim >> cur_yaw) {
+        pose_ok = true;
+        RCLCPP_WARN(btLogger(),
+          "ReplanRoute: Odometry yok, seg_goal konumu kullanılıyor (%.2f, %.2f)",
+          cur_x, cur_y);
+      }
+    }
+  }
+
+  if (!pose_ok) {
+    RCLCPP_ERROR(btLogger(),
+      "ReplanRoute: Başlangıç konumu belirlenemedi (odometry yok, seg_goal boş)!");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // ── Adım 2: En yakın graph düğümünü bul ──────────────────────────────
+  std::string start_id = globalSegmentGraph().findNearestNode(cur_x, cur_y);
+  if (start_id.empty()) {
+    RCLCPP_ERROR(btLogger(),
+      "ReplanRoute: findNearestNode başarısız (%.2f, %.2f) — harita yüklendi mi?",
+      cur_x, cur_y);
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // ── Adım 3: Mevcut rotadan HEDEF düğümünü al ──────────────────────────
+  // Orijinal misyon hedefi: mevcut route'un SON segmentinin id'si
+  std::shared_ptr<Route> existing_route;
+  if (!globalRootBlackboard()->get("route_obj", existing_route) ||
+      !existing_route || existing_route->empty())
+  {
+    RCLCPP_ERROR(btLogger(),
+      "ReplanRoute: Blackboard'da geçerli route_obj bulunamadı!");
+    return BT::NodeStatus::FAILURE;
+  }
+  std::string goal_id = existing_route->at(existing_route->size() - 1).id;
+
+  // ── Adım 4: Yeni rota planla ─────────────────────────────────────────
+  RCLCPP_WARN(btLogger(),
+    "ReplanRoute: sebep=%s, başlangıç=%s → hedef=%s",
+    reason.c_str(), start_id.c_str(), goal_id.c_str());
+
+  auto new_route = globalSegmentGraph().planRoute({start_id, goal_id});
+
+  if (new_route.empty()) {
+    RCLCPP_ERROR(btLogger(),
+      "ReplanRoute: Yeni rota planlama başarısız! başlangıç=%s hedef=%s",
+      start_id.c_str(), goal_id.c_str());
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // ── Adım 5: Blackboard'u güncelle ──────────────────────────────────────
+  auto new_route_ptr = std::make_shared<Route>(new_route);
+  globalRootBlackboard()->set("route_obj",  new_route_ptr);
+  globalRootBlackboard()->set("route_size", static_cast<int>(new_route.size()));
+  globalRootBlackboard()->set("seg_index",  0);  // yeni rotadan başla
+
+  RCLCPP_WARN(btLogger(),
+    "ReplanRoute: TAMAM — sebep=%s, yeni rota %d segment (baş=%s, son=%s)",
+    reason.c_str(), static_cast<int>(new_route.size()),
+    new_route.at(0).id.c_str(), new_route.at(new_route.size() - 1).id.c_str());
+
   return BT::NodeStatus::SUCCESS;
 }
 

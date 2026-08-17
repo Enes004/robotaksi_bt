@@ -79,6 +79,11 @@ BT::NodeStatus IsSegmentType::tick()
   RCLCPP_DEBUG(btLogger(), "IsSegmentType: '%s' == '%s' → %s",
                seg_type.c_str(), expected.c_str(), match ? "EVET" : "HAYIR");
 
+  // Eşleşen segment tipini istatistiklere kaydet
+  if (match) {
+    RunStats::instance().recordSegmentType(seg_type);
+  }
+
   return match ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 

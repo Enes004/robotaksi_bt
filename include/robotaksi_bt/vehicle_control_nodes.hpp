@@ -3,7 +3,7 @@
 //
 // Aracın fiziksel kontrolüne dair temel node'lar:
 //   - SetMaxSpeed     : hız limiti ayarla (SyncAction)
-//   - StopVehicle     : tam durdur (SyncAction)
+//   - StopVehicle     : tam durdur (StatefulAction, opsiyonel hold_sec portu)
 //   - TurnHeadlights  : far aç/kapat (SyncAction)
 //   - Dwell           : belirli süre bekle (StatefulAction)
 //
@@ -22,6 +22,7 @@
 #include "std_msgs/msg/bool.hpp"
 #include <string>
 #include <chrono>
+#include <optional>
 
 namespace robotaksi_bt {
 
@@ -48,21 +49,47 @@ private:
 };
 
 // ─────────────────────────────────────────────
-// StopVehicle (SyncAction)
+// StopVehicle (StatefulAction)
 //
-// Aracı tamamen durdurur — /cmd_vel'e sıfır Twist yayınlar.
+// Aracı tamamen durdurur — /cmd_vel_bt'ye sıfır Twist yayınlar.
+// (twist_mux mimarisi: BT → /cmd_vel_bt, Nav2 → /cmd_vel_nav, mux → /cmd_vel)
 // Duruşu DOĞRULAMAZ — bunu CheckStopAccuracy yapar.
+//
+// hold_sec portu:
+//   hold_sec <= 0 (varsayılan) → bir kez Twist yayınla, hemen SUCCESS dön
+//                                 (eski SyncAction davranışı — Sequence'ler bozulmaz)
+//   hold_sec  > 0              → o kadar saniye boyunca her tick'te tekrar
+//                                 Twist yayınla (RUNNING), süre dolunca SUCCESS
+//                                 XML: <StopVehicle hold_sec="20.0" />
 // ─────────────────────────────────────────────
-class StopVehicle : public BT::SyncActionNode {
+class StopVehicle : public BT::StatefulActionNode {
 public:
   StopVehicle(const std::string& name, const BT::NodeConfiguration& config)
-    : BT::SyncActionNode(name, config) {}
+    : BT::StatefulActionNode(name, config) {}
 
-  static BT::PortsList providedPorts() { return {}; }
+  static BT::PortsList providedPorts() {
+    return {
+      BT::InputPort<double>("hold_sec", 0.0,
+        "0 → anlık dur+SUCCESS (varsayılan);  >0 → o kadar saniye sürekli dur komutu gönder")
+    };
+  }
 
-  BT::NodeStatus tick() override;
+  BT::NodeStatus onStart()   override;
+  BT::NodeStatus onRunning() override;
+  void           onHalted()  override;
+
 private:
+  /// Lazy-init publisher — ilk onStart'ta oluşturulur.
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_;
+
+  /// hold_sec > 0 durumunda tutulur; onStart'ta okunur.
+  double hold_sec_ = 0.0;
+
+  /// Zamanlayıcı — onStart'ta başlatılır.
+  std::chrono::steady_clock::time_point start_time_;
+
+  /// Twist publish yardımcısı — hem onStart hem onRunning kullanır.
+  void publishZeroVel();
 };
 
 // ─────────────────────────────────────────────

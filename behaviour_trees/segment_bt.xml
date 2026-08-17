@@ -298,7 +298,9 @@
   <BehaviorTree ID="Seg_PassengerStop">
     <Sequence name="Seg_PassengerStop">
       <SubTree ID="SafeDrive" _autoremap="true" />
-      <StopVehicle />
+      <!-- hold_sec="20.0": Dwell (15-20 sn) boyunca sürekli /cmd_vel_bt=0 yayınla.
+           SafetyReflexes sessizliği sırasında araç kaymasın. -->
+      <StopVehicle hold_sec="20.0" />
       <Fallback name="EnsureAccuracy">
         <CheckStopAccuracy point="{seg_goal}" tolerance="1.0" heading_tolerance="15.0" />
         <Sequence>
@@ -363,7 +365,10 @@
     <Action ID="FollowLaneSegment">
       <input_port name="goal" type="std::string" />
     </Action>
-    <Action ID="StopVehicle" />
+    <Action ID="StopVehicle">
+      <input_port name="hold_sec" type="double" default="0.0"
+        description="0: anlık dur+SUCCESS (varsayılan);  &gt;0: o kadar sn RUNNING kalarak sürekli dur komutu gönder" />
+    </Action>
     <Action ID="WaitForClear">
       <input_port name="hazard" type="std::string" />
     </Action>
