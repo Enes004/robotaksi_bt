@@ -82,6 +82,10 @@ struct Segment {
   // Şerit merkez çizgisi noktaları (yerel metre düzleminde).
   // Nav2 FollowPath action'ına verilecek.
   std::vector<std::pair<double, double>> path_xy;
+
+  // Tüm alt parçaların (center_b_id içindeki line_id'ler) başlangıç ve
+  // bitiş noktaları. Bağlantı (komşuluk) kontrolleri sadece bunlara bakılarak yapılır.
+  std::vector<std::pair<double, double>> connection_endpoints;
 };
 
 // ─── Route: planlanmış segment dizisi ───
@@ -212,12 +216,19 @@ public:
 
         if (center_ids.empty()) continue;
 
-        // ── Koordinatları birleştir (sırayla) ──
+        // ── Koordinatları birleştir (sırayla) ve Uç Noktaları Topla ──
         std::vector<std::pair<double, double>> merged_lonlat;
+        std::vector<std::pair<double, double>> endpoints_lonlat;
+
         for (int cid : center_ids) {
           auto it = line_coords.find(cid);
           if (it == line_coords.end()) continue;
           const auto& lc = it->second;
+
+          if (!lc.empty()) {
+            endpoints_lonlat.push_back(lc.front());
+            endpoints_lonlat.push_back(lc.back());
+          }
 
           if (!merged_lonlat.empty() && !lc.empty()) {
             // Birleştirme yönünü kontrol et: mevcut son nokta,
@@ -253,6 +264,12 @@ public:
           path_meters.emplace_back(lonToMeters(lon), latToMeters(lat));
         }
 
+        std::vector<std::pair<double, double>> ep_meters;
+        ep_meters.reserve(endpoints_lonlat.size());
+        for (const auto& [lon, lat] : endpoints_lonlat) {
+          ep_meters.emplace_back(lonToMeters(lon), latToMeters(lat));
+        }
+
         // ── Cost: path noktaları arası öklid mesafe toplamı (metre) ──
         double path_cost = 0.0;
         for (size_t i = 1; i < path_meters.size(); ++i) {
@@ -285,6 +302,7 @@ public:
         seg.goal_y = gy;
         seg.goal_yaw = gyaw;
         seg.path_xy = std::move(path_meters);
+        seg.connection_endpoints = std::move(ep_meters);
 
         // ── GraphNode oluştur ──
         GraphNode gn;
@@ -301,34 +319,28 @@ public:
     }
 
     // ── 3) YÖNSÜZ BAĞLANTI KUR ──
-    // İki lanelet bağlı: birinin herhangi bir ucu (ilk veya son nokta)
-    // diğerinin herhangi bir ucuna 0.5 m'den yakınsa.
+    // İki lanelet bağlı: herhangi bir parçasının ucu (ilk veya son)
+    // diğerinin herhangi bir parçasının ucuna 0.5 m'den yakınsa.
     constexpr double kProximityThreshold = 0.5;  // metre
 
     for (size_t i = 0; i < segments_.size(); ++i) {
-      if (segments_[i].path_xy.empty()) continue;
-      const auto& pi_front = segments_[i].path_xy.front();
-      const auto& pi_back = segments_[i].path_xy.back();
+      const auto& ep_i = segments_[i].connection_endpoints;
+      if (ep_i.empty()) continue;
 
       for (size_t j = i + 1; j < segments_.size(); ++j) {
-        if (segments_[j].path_xy.empty()) continue;
-        const auto& pj_front = segments_[j].path_xy.front();
-        const auto& pj_back = segments_[j].path_xy.back();
+        const auto& ep_j = segments_[j].connection_endpoints;
+        if (ep_j.empty()) continue;
 
-        // 4 kombinasyonu kontrol et
         bool connected = false;
-        double d1 = std::hypot(pi_back.first - pj_front.first,
-                               pi_back.second - pj_front.second);
-        double d2 = std::hypot(pi_back.first - pj_back.first,
-                               pi_back.second - pj_back.second);
-        double d3 = std::hypot(pi_front.first - pj_front.first,
-                               pi_front.second - pj_front.second);
-        double d4 = std::hypot(pi_front.first - pj_back.first,
-                               pi_front.second - pj_back.second);
-
-        if (d1 < kProximityThreshold || d2 < kProximityThreshold ||
-            d3 < kProximityThreshold || d4 < kProximityThreshold) {
-          connected = true;
+        for (const auto& pi : ep_i) {
+          for (const auto& pj : ep_j) {
+            double d = std::hypot(pi.first - pj.first, pi.second - pj.second);
+            if (d < kProximityThreshold) {
+              connected = true;
+              break;
+            }
+          }
+          if (connected) break;
         }
 
         if (connected) {
