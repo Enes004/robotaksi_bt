@@ -8,3 +8,4 @@ log/
 *.pyc
 __pycache__/
 src/robotaksi_localization/
+src/robotaksi_navigation/
