@@ -327,18 +327,77 @@ BT::NodeStatus ReplanRoute::tick() {
 BT::NodeStatus CalculateLaneChange::tick() {
   std::string target_lane;
   getInput("target_lane", target_lane);
-  RCLCPP_INFO(btLogger(), "CalculateLaneChange: STUB hedef=%s",
-              target_lane.c_str());
-  // TODO: Yanal offset hesapla (±3.5m şerit genişliği)
-  globalRootBlackboard()->set("seg_goal", std::string("0.0;0.0;0.0")); // kök BB
+  
+  double cur_x, cur_y, cur_yaw;
+  if (!OdometryProvider::instance().getPose(cur_x, cur_y, cur_yaw)) {
+    RCLCPP_WARN(btLogger(), "CalculateLaneChange: Odometry yok, lane change hesaplanamıyor.");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  std::string current_id = globalSegmentGraph().findNearestNode(cur_x, cur_y);
+  if (current_id.empty()) {
+    RCLCPP_WARN(btLogger(), "CalculateLaneChange: Bulunulan segment tespit edilemedi.");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  std::string parallel_id = globalSegmentGraph().findParallelLanelet(current_id);
+  if (parallel_id.empty()) {
+    RCLCPP_WARN(btLogger(), "CalculateLaneChange: Yan şerit (paralel lanelet) bulunamadı.");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  const auto* node = globalSegmentGraph().getNode(parallel_id);
+  if (!node) return BT::NodeStatus::FAILURE;
+
+  std::ostringstream oss;
+  // Varsayılan olarak yan şeridin hedef x,y'sini ve kendi yaw'ını veya şeridin yaw'ını kullan
+  oss << node->x << ";" << node->y << ";" << cur_yaw; 
+  globalRootBlackboard()->set("seg_goal", oss.str());
+
+  RCLCPP_INFO(btLogger(), "CalculateLaneChange: %s -> %s (hedef: %s)", current_id.c_str(), parallel_id.c_str(), oss.str().c_str());
   return BT::NodeStatus::SUCCESS;
 }
 
 BT::NodeStatus FindParkingSlot::tick() {
-  RCLCPP_INFO(btLogger(), "FindParkingSlot: STUB");
-  // TODO: Kamera/Lidar ile P-3a tabelası olan boş slot bul
-  setOutput("slot_pose", std::string("0.0;0.0;0.0"));
-  return BT::NodeStatus::SUCCESS;
+  // TODO: Algı/park sensörü entegre olunca doluluk kontrolü eklenecek. Şimdilik hepsi boş varsayılıyor.
+  std::string point_str;
+  if (!globalRootBlackboard()->get("seg_goal", point_str) || point_str.empty()) {
+    return BT::NodeStatus::FAILURE;
+  }
+  
+  double tgt_x = 0.0, tgt_y = 0.0, tgt_yaw = 0.0;
+  std::istringstream iss(point_str);
+  char delim;
+  if (!(iss >> tgt_x >> delim >> tgt_y >> delim >> tgt_yaw)) {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  const auto& spots = globalSegmentGraph().parking_spots_;
+  if (spots.empty()) {
+    RCLCPP_WARN(btLogger(), "FindParkingSlot: Haritada park noktası yok.");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  double min_dist = std::numeric_limits<double>::max();
+  const ParkingSpot* best_spot = nullptr;
+
+  for (const auto& sp : spots) {
+    double d = std::hypot(sp.x - tgt_x, sp.y - tgt_y);
+    if (d < min_dist) {
+      min_dist = d;
+      best_spot = &sp;
+    }
+  }
+
+  if (best_spot) {
+    std::ostringstream oss;
+    oss << best_spot->x << ";" << best_spot->y << ";" << tgt_yaw;
+    setOutput("slot_pose", oss.str());
+    RCLCPP_INFO(btLogger(), "FindParkingSlot: En yakın park noktası %s seçildi.", best_spot->vertex_id.c_str());
+    return BT::NodeStatus::SUCCESS;
+  }
+  
+  return BT::NodeStatus::FAILURE;
 }
 
 // ═══════════════ 🔧 SENSÖR BAĞIMLI STUB'LAR ═══════════════
@@ -346,45 +405,126 @@ BT::NodeStatus FindParkingSlot::tick() {
 // SafetyReflexes'te Inverter ile SUCCESS'a çevrilir → devam et
 
 BT::NodeStatus PedestrianAhead::tick() {
-  // TODO: /perception/pedestrian (Bool) topic'ini subscribe et
-  return BT::NodeStatus::FAILURE;
+  if (!sub_) {
+    auto ros = getRosNode(config());
+    if (ros) {
+      sub_ = ros->create_subscription<std_msgs::msg::Bool>(
+          kTopicPedestrian, rclcpp::SensorDataQoS(),
+          [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+            last_val_ = msg->data;
+            has_data_ = true;
+          });
+    }
+  }
+  if (!has_data_) return BT::NodeStatus::FAILURE;
+  return last_val_ ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus DynamicObstacleAhead::tick() {
-  // TODO: /perception/dynamic_obstacle (Bool) topic'ini subscribe et
-  return BT::NodeStatus::FAILURE;
+  if (!sub_) {
+    auto ros = getRosNode(config());
+    if (ros) {
+      sub_ = ros->create_subscription<std_msgs::msg::Bool>(
+          kTopicDynamicObstacle, rclcpp::SensorDataQoS(),
+          [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+            last_val_ = msg->data;
+            has_data_ = true;
+          });
+    }
+  }
+  if (!has_data_) return BT::NodeStatus::FAILURE;
+  return last_val_ ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus StaticObstacleInLane::tick() {
-  // TODO: /perception/static_obstacle (Bool) topic'ini subscribe et
-  return BT::NodeStatus::FAILURE;
+  if (!sub_) {
+    auto ros = getRosNode(config());
+    if (ros) {
+      sub_ = ros->create_subscription<std_msgs::msg::Bool>(
+          kTopicStaticObstacle, rclcpp::SensorDataQoS(),
+          [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+            last_val_ = msg->data;
+            has_data_ = true;
+          });
+    }
+  }
+  if (!has_data_) return BT::NodeStatus::FAILURE;
+  return last_val_ ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus AvoidanceSpaceAvailable::tick() {
-  // TODO: Costmap'ten yan şerit boşluk kontrolü
+  // TODO: Nav2 local_costmap/costmap_raw topic'inden şerit doluluğu okunacak, algı/Nav2 entegrasyonu netleşince yazılacak.
   return BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus IsTwoWayRoad::tick() {
-  // TODO: segment_map.yaml'dan veya B-52a tabelasından kontrol
+  std::string point_str;
+  if (!globalRootBlackboard()->get("seg_goal", point_str) || point_str.empty()) {
+    return BT::NodeStatus::FAILURE;
+  }
+  
+  double cur_x, cur_y, cur_yaw;
+  std::istringstream iss(point_str);
+  char delim;
+  if (iss >> cur_x >> delim >> cur_y >> delim >> cur_yaw) {
+    std::string seg_id = globalSegmentGraph().findNearestNode(cur_x, cur_y);
+    if (!seg_id.empty()) {
+      auto* node = globalSegmentGraph().getNode(seg_id);
+      if (node) {
+        // Graf yapısında two_way şimdilik her zaman false ama mantık eklendi.
+        // segment verilerine erişim için Segment structına ihtiyacımız var.
+        for (const auto& s : globalSegmentGraph().allSegments()) {
+          if (s.id == seg_id) {
+            return s.two_way ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+          }
+        }
+      }
+    }
+  }
+  
   return BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus TrafficLightAhead::tick() {
-  // TODO: /perception/traffic_light (String) subscribe et
-  setOutput("light_color", std::string("NONE"));
-  return BT::NodeStatus::FAILURE;
+  std::string color;
+  if (!PerceptionProvider::instance().getTrafficLightColor(color)) {
+    return BT::NodeStatus::FAILURE;
+  }
+  setOutput("light_color", color);
+  return (color != "none" && color != "NONE") ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus StopSignAhead::tick() {
-  // TODO: /perception/stop_sign (Bool) subscribe et
-  return BT::NodeStatus::FAILURE;
+  if (!sub_) {
+    auto ros = getRosNode(config());
+    if (ros) {
+      sub_ = ros->create_subscription<std_msgs::msg::Bool>(
+          kTopicStopSign, rclcpp::SensorDataQoS(),
+          [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+            last_val_ = msg->data;
+            has_data_ = true;
+          });
+    }
+  }
+  if (!has_data_) return BT::NodeStatus::FAILURE;
+  return last_val_ ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus GlobalRoadSignAhead::tick() {
-  // TODO: /perception/road_sign (String) subscribe et
-  setOutput("sign_type", std::string("NONE"));
-  return BT::NodeStatus::FAILURE;
+  if (!sub_) {
+    auto ros = getRosNode(config());
+    if (ros) {
+      sub_ = ros->create_subscription<std_msgs::msg::String>(
+          kTopicRoadSign, rclcpp::SensorDataQoS(),
+          [this](std_msgs::msg::String::ConstSharedPtr msg) {
+            last_val_ = msg->data;
+            has_data_ = true;
+          });
+    }
+  }
+  if (!has_data_) return BT::NodeStatus::FAILURE;
+  setOutput("sign_type", last_val_);
+  return (last_val_ != "none" && last_val_ != "NONE") ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus TurnConflictsWithSigns::tick() {
@@ -659,8 +799,14 @@ BT::NodeStatus WaitForGreenLight::onStart() {
   return BT::NodeStatus::RUNNING;
 }
 BT::NodeStatus WaitForGreenLight::onRunning() {
-  // TODO: /perception/traffic_light topic'inden renk oku
-  return BT::NodeStatus::SUCCESS; // Stub: hemen yeşil
+  std::string color;
+  if (PerceptionProvider::instance().getTrafficLightColor(color)) {
+    if (color == "green" || color == "GREEN") {
+      RCLCPP_INFO(btLogger(), "WaitForGreenLight: Yeşil ışık tespit edildi.");
+      return BT::NodeStatus::SUCCESS;
+    }
+  }
+  return BT::NodeStatus::RUNNING;
 }
 void WaitForGreenLight::onHalted() {
   RCLCPP_WARN(btLogger(), "WaitForGreenLight: HALTED");
@@ -671,17 +817,46 @@ BT::NodeStatus ProceedOnGreen::tick() {
   return BT::NodeStatus::SUCCESS;
 }
 
-BT::NodeStatus StopAtStopLine::tick() {
-  RCLCPP_INFO(btLogger(), "StopAtStopLine: STUB");
-  return BT::NodeStatus::SUCCESS;
+BT::NodeStatus StopAtStopLine::onStart() {
+  RCLCPP_INFO(btLogger(), "StopAtStopLine: Mesafe kontrolü başlıyor.");
+  return BT::NodeStatus::RUNNING;
+}
+BT::NodeStatus StopAtStopLine::onRunning() {
+  if (!sub_) {
+    auto ros = getRosNode(config());
+    if (ros) {
+      sub_ = ros->create_subscription<std_msgs::msg::Float32>(
+          kTopicStopLineDistance, rclcpp::SensorDataQoS(),
+          [this](std_msgs::msg::Float32::ConstSharedPtr msg) {
+            last_val_ = msg->data;
+            has_data_ = true;
+          });
+    }
+  }
+  if (!has_data_) return BT::NodeStatus::RUNNING; // Bilgi yoksa bekle (Stateful mantığı)
+  
+  double tolerance = 1.0;
+  getInput("tolerance", tolerance);
+
+  if (last_val_ >= 0 && last_val_ <= tolerance) {
+    RCLCPP_INFO(btLogger(), "StopAtStopLine: Dur çizgisine ulaşıldı (%.2fm).", last_val_);
+    return BT::NodeStatus::SUCCESS;
+  }
+  
+  return BT::NodeStatus::RUNNING;
+}
+void StopAtStopLine::onHalted() {
+  RCLCPP_WARN(btLogger(), "StopAtStopLine: HALTED");
 }
 
 BT::NodeStatus YieldAtRoundabout::tick() {
+  // TODO: Dinamik engel algısı (kavşak içi araçlar) entegre edilerek kavşakta bekleme/geçme kararı verilecek. Şimdilik STUB.
   RCLCPP_INFO(btLogger(), "YieldAtRoundabout: STUB");
   return BT::NodeStatus::SUCCESS;
 }
 
 BT::NodeStatus ExecuteParking::onStart() {
+  // TODO: gerçek dik park manevrası Nav2 veya özel bir controller ile yapılacak, şu an zaman bazlı simülasyon.
   RCLCPP_INFO(btLogger(), "ExecuteParking: STUB START");
   start_time_ = std::chrono::steady_clock::now();
   return BT::NodeStatus::RUNNING;

@@ -28,6 +28,9 @@
 #include "behaviortree_cpp_v3/condition_node.h"
 #include "robotaksi_bt/segment_graph.hpp"
 #include <nav_msgs/msg/odometry.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <tf2/utils.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <string>
@@ -44,6 +47,15 @@ namespace robotaksi_bt {
 // twist_mux mimarisinde BT, /cmd_vel'e DEĞİL /cmd_vel_bt'ye yazar;
 // twist_mux önceliğe göre gerçek /cmd_vel'i üretir.
 constexpr const char* kCmdVelTopic = "/cmd_vel_bt";
+
+// Algı (Perception) Topic Sabitleri
+constexpr const char* kTopicPedestrian = "/perception/pedestrian";
+constexpr const char* kTopicDynamicObstacle = "/perception/dynamic_obstacle";
+constexpr const char* kTopicStaticObstacle = "/perception/static_obstacle";
+constexpr const char* kTopicTrafficLight = "/perception/traffic_light";
+constexpr const char* kTopicStopSign = "/perception/stop_sign";
+constexpr const char* kTopicRoadSign = "/perception/road_sign";
+constexpr const char* kTopicStopLineDistance = "/perception/stop_line_distance";
 
 // ─── Ortak logger fonksiyonu ───
 // Tüm node'lar bu fonksiyonla log basar.
@@ -258,6 +270,50 @@ private:
   nav_msgs::msg::Odometry last_msg_;
   rclcpp::Time last_stamp_{0, 0, RCL_ROS_TIME};
   bool has_data_ = false;
+  mutable std::mutex mtx_;
+};
+
+// ─── Algı (Perception) Veri Sağlayıcı (Singleton) ───
+// Özellikle TrafficLightAhead ve WaitForGreenLight gibi birden fazla
+// node'un aynı veriye ihtiyaç duyduğu durumlar için.
+class PerceptionProvider {
+public:
+  static PerceptionProvider& instance() {
+    static PerceptionProvider inst;
+    return inst;
+  }
+
+  void init(rclcpp::Node::SharedPtr node) {
+    if (tl_sub_) return; // zaten init edilmiş
+    node_ = node;
+
+    tl_sub_ = node->create_subscription<std_msgs::msg::String>(
+      kTopicTrafficLight, rclcpp::SensorDataQoS(),
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        last_tl_color_ = msg->data;
+        has_tl_data_ = true;
+      });
+    
+    RCLCPP_INFO(btLogger(), "PerceptionProvider: init tamamlandı.");
+  }
+
+  bool getTrafficLightColor(std::string& color) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!has_tl_data_) return false;
+    color = last_tl_color_;
+    return true;
+  }
+
+private:
+  PerceptionProvider() = default;
+  PerceptionProvider(const PerceptionProvider&) = delete;
+  PerceptionProvider& operator=(const PerceptionProvider&) = delete;
+
+  rclcpp::Node::SharedPtr node_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr tl_sub_;
+  std::string last_tl_color_ = "none";
+  bool has_tl_data_ = false;
   mutable std::mutex mtx_;
 };
 

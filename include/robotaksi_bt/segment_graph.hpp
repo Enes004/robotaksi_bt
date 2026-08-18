@@ -65,6 +65,12 @@ struct GraphNode {
   std::string type;  // LANE_FOLLOW, INTERSECTION, vb.
 };
 
+struct ParkingSpot {
+  std::string vertex_id;
+  double x;
+  double y;
+};
+
 struct Segment {
   std::string id;
   std::string from_node;        // kaynak düğüm id (lanelet_id string)
@@ -73,6 +79,7 @@ struct Segment {
   std::string lane;             // right / left (opsiyonel)
   std::string meta;             // ek veri: exit_node, mission id, vb.
   double cost = 1.0;            // kenar ağırlığı — metre cinsinden path uzunluğu
+  bool two_way = false;         // yol iki yönlü mü?
 
   // Segment bitiş hedefi (Pose2D basitleştirilmiş)
   double goal_x = 0.0;
@@ -196,6 +203,9 @@ public:
                          [](unsigned char c) { return std::toupper(c); });
         }
 
+        // TODO: properties içinden "two_way" bilgisini de oku ve seg.two_way = true/false yap.
+        // Şimdilik varsayılan false.
+
         // ── center_b_id parse: tek "347" veya virgüllü "373,374,375" ──
         std::string cbid_raw = props["center_b_id"].get<std::string>();
         std::vector<int> center_ids;
@@ -270,6 +280,12 @@ public:
           ep_meters.emplace_back(lonToMeters(lon), latToMeters(lat));
         }
 
+        // TODO(Fix): Roundabout (kavşak) gibi düğümlerde, center_b_id içinde
+        // birden fazla (ve bazen paralel veya döngüsel) alt şerit bulunabiliyor.
+        // Tüm bu parçalar peş peşe eklendiğinde path_cost (uzunluk) gerçekte geçilen 
+        // rotadan çok daha büyük çıkabiliyor (örn. 311m).
+        // Düzeltme için bu parçaların doğrudan birleştirilmesi yerine,
+        // sadece giriş ve çıkış arasındaki gerçek mesafenin hesaplanması gerekir.
         // ── Cost: path noktaları arası öklid mesafe toplamı (metre) ──
         double path_cost = 0.0;
         for (size_t i = 1; i < path_meters.size(); ++i) {
@@ -298,6 +314,7 @@ public:
         seg.to_node = lid;
         seg.type = type_str;
         seg.cost = path_cost;
+        seg.two_way = false; // TODO: haritadan oku
         seg.goal_x = gx;
         seg.goal_y = gy;
         seg.goal_yaw = gyaw;
@@ -370,6 +387,11 @@ public:
         return Route{};
       }
       for (auto& s : sub) {
+        // Ardışık Dijkstra çağrılarında, bir rotanın bitiş düğümü (waypoint_ids[i+1])
+        // sonraki rotanın başlangıç düğümü olarak dönüyor. Bunu tekilleştir.
+        if (!full_route.segments.empty() && full_route.segments.back().id == s.id) {
+          continue;
+        }
         full_route.segments.push_back(s);
         full_route.total_cost += s.cost;
       }
@@ -398,6 +420,112 @@ public:
 
   const std::unordered_map<std::string, GraphNode>& allNodes() const { return nodes_; }
 
+  // ──────────────────────────────────────────────
+  // Park Noktalarını Yükle (vertex_layer.geojson)
+  // ──────────────────────────────────────────────
+  bool loadParkingSpots(const std::string& vertex_layer_file) {
+    parking_spots_.clear();
+    std::ifstream file(vertex_layer_file);
+    if (!file.is_open()) return false;
+
+    nlohmann::json root;
+    try { file >> root; } catch (...) { return false; }
+
+    if (!root.contains("features") || !root["features"].is_array())
+      return false;
+
+    for (const auto& feat : root["features"]) {
+      if (!feat.contains("properties") || !feat.contains("geometry"))
+        continue;
+      const auto& props = feat["properties"];
+      if (!props.contains("regulation_type") || props["regulation_type"].is_null())
+        continue;
+
+      std::string reg_type = props["regulation_type"].get<std::string>();
+      if (reg_type != "parking_spot") continue;
+
+      std::string vid = "";
+      if (props.contains("vertex_id") && !props["vertex_id"].is_null()) {
+        if (props["vertex_id"].is_number()) {
+          vid = std::to_string(props["vertex_id"].get<int>());
+        } else {
+          vid = props["vertex_id"].get<std::string>();
+        }
+      }
+
+      const auto& geom = feat["geometry"];
+      if (!geom.contains("coordinates") || !geom["coordinates"].is_array() || geom["coordinates"].empty())
+        continue;
+      
+      double lon = 0.0, lat = 0.0;
+      
+      // Handle MultiPoint or Point
+      std::string geom_type = geom.contains("type") ? geom["type"].get<std::string>() : "Point";
+      if (geom_type == "MultiPoint" || (geom["coordinates"][0].is_array())) {
+        const auto& first_pt = geom["coordinates"][0];
+        if (!first_pt.is_array() || first_pt.size() < 2) continue;
+        lon = first_pt[0].get<double>();
+        lat = first_pt[1].get<double>();
+      } else {
+        if (geom["coordinates"].size() < 2) continue;
+        lon = geom["coordinates"][0].get<double>();
+        lat = geom["coordinates"][1].get<double>();
+      }
+      
+      ParkingSpot ps;
+      ps.vertex_id = vid;
+      ps.x = lonToMeters(lon);
+      ps.y = latToMeters(lat);
+      parking_spots_.push_back(ps);
+    }
+    return !parking_spots_.empty();
+  }
+
+  // ──────────────────────────────────────────────
+  // Yan (Paralel) Şerit Bul (Şerit Değiştirme için)
+  // ──────────────────────────────────────────────
+  std::string findParallelLanelet(const std::string& current_id) const {
+    auto it = segment_index_.find(current_id);
+    if (it == segment_index_.end()) return "";
+
+    const auto& cur_seg = segments_[it->second];
+    if (cur_seg.path_xy.empty()) return "";
+
+    // current_id'nin merkezini bulalım
+    size_t mid_idx = cur_seg.path_xy.size() / 2;
+    double cx = cur_seg.path_xy[mid_idx].first;
+    double cy = cur_seg.path_xy[mid_idx].second;
+    double cyaw = cur_seg.goal_yaw; // basit yaklaşım: bitiş açısı
+
+    std::string best_match = "";
+    double min_dist = std::numeric_limits<double>::max();
+
+    for (const auto& other : segments_) {
+      if (other.id == current_id) continue;
+      if (other.path_xy.empty()) continue;
+
+      // Yön kontrolü (Açı farkı < 30 derece)
+      double oyaw = other.goal_yaw;
+      double yaw_diff = std::abs(cyaw - oyaw);
+      while (yaw_diff > M_PI) yaw_diff -= 2.0 * M_PI;
+      yaw_diff = std::abs(yaw_diff);
+      if (yaw_diff > 30.0 * M_PI / 180.0) continue; // paralel değil
+
+      // Merkezine mesafe kontrolü (Offset 2m - 6m arası)
+      size_t omid = other.path_xy.size() / 2;
+      double ox = other.path_xy[omid].first;
+      double oy = other.path_xy[omid].second;
+      double d = std::hypot(ox - cx, oy - cy);
+
+      if (d >= 2.0 && d <= 6.0 && d < min_dist) {
+        min_dist = d;
+        best_match = other.id;
+      }
+    }
+
+    return best_match;
+  }
+
   // En yakın düğümü bul (x,y koordinatına göre — metre cinsinden)
   // path_xy üzerindeki TÜM noktalara bakarak en yakın lanelet'i bulur
   // (görev noktaları yolun ortasına denk gelebiliyor).
@@ -415,6 +543,8 @@ public:
     }
     return nearest;
   }
+
+  std::vector<ParkingSpot> parking_spots_;
 
 private:
   std::unordered_map<std::string, GraphNode> nodes_;

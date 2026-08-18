@@ -37,6 +37,16 @@ int main(int argc, char **argv)
   // Odometry provider'ı başlat — tüm BT node'ları erişebilir
   robotaksi_bt::OdometryProvider::instance().init(ros_node);
 
+  // Algı provider'ı başlat (trafik ışıkları vb.)
+  robotaksi_bt::PerceptionProvider::instance().init(ros_node);
+
+  // Park noktalarını yükle
+  if (!robotaksi_bt::globalSegmentGraph().loadParkingSpots("config/vertex_layer.geojson")) {
+    RCLCPP_WARN(ros_node->get_logger(), "Park noktaları yüklenemedi (vertex_layer.geojson)");
+  } else {
+    RCLCPP_INFO(ros_node->get_logger(), "Park noktaları yüklendi: %zu nokta", robotaksi_bt::globalSegmentGraph().parking_spots_.size());
+  }
+
   std::cout << "\n=== Segment BT Runner ===" << std::endl;
 
   // BT Factory — tüm node'ları kaydet

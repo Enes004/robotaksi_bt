@@ -99,6 +99,10 @@ public:
   PedestrianAhead(const std::string& n, const BT::NodeConfiguration& c) : BT::ConditionNode(n,c) {}
   static BT::PortsList providedPorts() { return { BT::InputPort<bool>("detected") }; }
   BT::NodeStatus tick() override;
+private:
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_;
+  bool last_val_ = false;
+  bool has_data_ = false;
 };
 
 class DynamicObstacleAhead : public BT::ConditionNode {
@@ -106,6 +110,10 @@ public:
   DynamicObstacleAhead(const std::string& n, const BT::NodeConfiguration& c) : BT::ConditionNode(n,c) {}
   static BT::PortsList providedPorts() { return { BT::InputPort<bool>("detected") }; }
   BT::NodeStatus tick() override;
+private:
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_;
+  bool last_val_ = false;
+  bool has_data_ = false;
 };
 
 class StaticObstacleInLane : public BT::ConditionNode {
@@ -113,6 +121,10 @@ public:
   StaticObstacleInLane(const std::string& n, const BT::NodeConfiguration& c) : BT::ConditionNode(n,c) {}
   static BT::PortsList providedPorts() { return { BT::InputPort<bool>("detected") }; }
   BT::NodeStatus tick() override;
+private:
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_;
+  bool last_val_ = false;
+  bool has_data_ = false;
 };
 
 class AvoidanceSpaceAvailable : public BT::ConditionNode {
@@ -141,6 +153,10 @@ public:
   StopSignAhead(const std::string& n, const BT::NodeConfiguration& c) : BT::ConditionNode(n,c) {}
   static BT::PortsList providedPorts() { return { BT::InputPort<std::string>("detected") }; }
   BT::NodeStatus tick() override;
+private:
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_;
+  bool last_val_ = false;
+  bool has_data_ = false;
 };
 
 class GlobalRoadSignAhead : public BT::ConditionNode {
@@ -148,6 +164,10 @@ public:
   GlobalRoadSignAhead(const std::string& n, const BT::NodeConfiguration& c) : BT::ConditionNode(n,c) {}
   static BT::PortsList providedPorts() { return { BT::OutputPort<std::string>("sign_type") }; }
   BT::NodeStatus tick() override;
+private:
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_;
+  std::string last_val_ = "NONE";
+  bool has_data_ = false;
 };
 
 class TurnConflictsWithSigns : public BT::ConditionNode {
@@ -239,13 +259,19 @@ public:
   BT::NodeStatus tick() override;
 };
 
-class StopAtStopLine : public BT::SyncActionNode {
+class StopAtStopLine : public BT::StatefulActionNode {
 public:
-  StopAtStopLine(const std::string& n, const BT::NodeConfiguration& c) : BT::SyncActionNode(n,c) {}
+  StopAtStopLine(const std::string& n, const BT::NodeConfiguration& c) : BT::StatefulActionNode(n,c) {}
   static BT::PortsList providedPorts() {
     return { BT::InputPort<double>("tolerance") };
   }
-  BT::NodeStatus tick() override;
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+private:
+  rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr sub_;
+  float last_val_ = -1.0f;
+  bool has_data_ = false;
 };
 
 class YieldAtRoundabout : public BT::SyncActionNode {
