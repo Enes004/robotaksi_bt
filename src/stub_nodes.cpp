@@ -404,6 +404,7 @@ BT::NodeStatus FindParkingSlot::tick() {
 // Condition stub'ları FAILURE döner = "tehlike yok"
 // SafetyReflexes'te Inverter ile SUCCESS'a çevrilir → devam et
 
+// Bu YOLO modeli yaya tanimiyor, TODO: ayri model veya ek sinif eklenene kadar pasif
 BT::NodeStatus PedestrianAhead::tick() {
   if (!sub_) {
     auto ros = getRosNode(config());
@@ -486,45 +487,44 @@ BT::NodeStatus IsTwoWayRoad::tick() {
 }
 
 BT::NodeStatus TrafficLightAhead::tick() {
-  std::string color;
-  if (!PerceptionProvider::instance().getTrafficLightColor(color)) {
-    return BT::NodeStatus::FAILURE;
-  }
+  std::string color = PerceptionProvider::instance().getLightColor();
   setOutput("light_color", color);
   return (color != "none" && color != "NONE") ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus StopSignAhead::tick() {
-  if (!sub_) {
-    auto ros = getRosNode(config());
-    if (ros) {
-      sub_ = ros->create_subscription<std_msgs::msg::Bool>(
-          kTopicStopSign, rclcpp::SensorDataQoS(),
-          [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
-            last_val_ = msg->data;
-            has_data_ = true;
-          });
-    }
-  }
-  if (!has_data_) return BT::NodeStatus::FAILURE;
-  return last_val_ ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  bool has_stop = PerceptionProvider::instance().hasClass("dur");
+  return has_stop ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+static std::string mapClassToSignType(const std::string& class_id) {
+  static const std::map<std::string, std::string> sign_map = {
+    {"dur", "STOP"}, {"giris yok", "NO_ENTRY"}, {"saga donulmez", "NO_RIGHT_TURN"},
+    {"sola donulmez", "NO_LEFT_TURN"}, {"sagdan gidin", "PASS_RIGHT"}, {"soldan gidin", "PASS_LEFT"},
+    {"ileri mecburi", "MUST_STRAIGHT"}, {"sag mecburi", "MUST_RIGHT"}, {"sol mecburi", "MUST_LEFT"},
+    {"ileri veya sag", "STRAIGHT_OR_RIGHT"}, {"ileri veya sol", "STRAIGHT_OR_LEFT"},
+    {"ileri sag", "STRAIGHT_RIGHT_LANE"}, {"ileri sol", "STRAIGHT_LEFT_LANE"},
+    {"seritd sag", "LANE_MERGE_RIGHT"}, {"seritd sol", "LANE_MERGE_LEFT"},
+    {"iki yonlu trafik", "TWO_WAY_ROAD"}, {"tunel", "TUNNEL_SIGN"},
+    {"ada", "ROUNDABOUT_ISLAND"}, {"yaya yolu", "PEDESTRIAN_CROSS"},
+    {"isikli isaret", "TRAFFIC_LIGHT_SIGN"}, {"20", "SPEED_20"}, {"30", "SPEED_30"},
+    {"durak", "BUS_STOP"}, {"park", "PARKING_OK"}, {"park yasak", "PARKING_FORBIDDEN"},
+    {"engelli park", "DISABLED_PARKING"}
+  };
+  auto it = sign_map.find(class_id);
+  if (it != sign_map.end()) return it->second;
+  return "none";
 }
 
 BT::NodeStatus GlobalRoadSignAhead::tick() {
-  if (!sub_) {
-    auto ros = getRosNode(config());
-    if (ros) {
-      sub_ = ros->create_subscription<std_msgs::msg::String>(
-          kTopicRoadSign, rclcpp::SensorDataQoS(),
-          [this](std_msgs::msg::String::ConstSharedPtr msg) {
-            last_val_ = msg->data;
-            has_data_ = true;
-          });
-    }
+  std::string highest_class = PerceptionProvider::instance().getHighestConfidenceSign();
+  if (highest_class.empty()) {
+    setOutput("sign_type", "none");
+    return BT::NodeStatus::FAILURE;
   }
-  if (!has_data_) return BT::NodeStatus::FAILURE;
-  setOutput("sign_type", last_val_);
-  return (last_val_ != "none" && last_val_ != "NONE") ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  std::string sign_type = mapClassToSignType(highest_class);
+  setOutput("sign_type", sign_type);
+  return (sign_type != "none") ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 BT::NodeStatus TurnConflictsWithSigns::tick() {
@@ -799,12 +799,10 @@ BT::NodeStatus WaitForGreenLight::onStart() {
   return BT::NodeStatus::RUNNING;
 }
 BT::NodeStatus WaitForGreenLight::onRunning() {
-  std::string color;
-  if (PerceptionProvider::instance().getTrafficLightColor(color)) {
-    if (color == "green" || color == "GREEN") {
-      RCLCPP_INFO(btLogger(), "WaitForGreenLight: Yeşil ışık tespit edildi.");
-      return BT::NodeStatus::SUCCESS;
-    }
+  std::string color = PerceptionProvider::instance().getLightColor();
+  if (color == "green" || color == "GREEN") {
+    RCLCPP_INFO(btLogger(), "WaitForGreenLight: Yeşil ışık tespit edildi.");
+    return BT::NodeStatus::SUCCESS;
   }
   return BT::NodeStatus::RUNNING;
 }

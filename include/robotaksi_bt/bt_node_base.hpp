@@ -31,6 +31,8 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <ultralytics_ros/msg/yolo_result.hpp>
+#include <vision_msgs/msg/detection2_d_array.hpp>
 #include <tf2/utils.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <string>
@@ -274,8 +276,6 @@ private:
 };
 
 // ─── Algı (Perception) Veri Sağlayıcı (Singleton) ───
-// Özellikle TrafficLightAhead ve WaitForGreenLight gibi birden fazla
-// node'un aynı veriye ihtiyaç duyduğu durumlar için.
 class PerceptionProvider {
 public:
   static PerceptionProvider& instance() {
@@ -284,25 +284,80 @@ public:
   }
 
   void init(rclcpp::Node::SharedPtr node) {
-    if (tl_sub_) return; // zaten init edilmiş
+    if (sub_) return;
     node_ = node;
 
-    tl_sub_ = node->create_subscription<std_msgs::msg::String>(
-      kTopicTrafficLight, rclcpp::SensorDataQoS(),
-      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+    sub_ = node->create_subscription<ultralytics_ros::msg::YoloResult>(
+      "/yolo_result", rclcpp::SensorDataQoS(),
+      [this](ultralytics_ros::msg::YoloResult::ConstSharedPtr msg) {
         std::lock_guard<std::mutex> lock(mtx_);
-        last_tl_color_ = msg->data;
-        has_tl_data_ = true;
+        class_scores_.clear();
+        for (const auto& det : msg->detections.detections) {
+          if (!det.results.empty()) {
+            const auto& hyp = det.results[0].hypothesis;
+            class_scores_[hyp.class_id] = hyp.score;
+          }
+        }
+        last_msg_time_ = node_->now();
+        has_data_ = true;
       });
     
-    RCLCPP_INFO(btLogger(), "PerceptionProvider: init tamamlandı.");
+    RCLCPP_INFO(btLogger(), "PerceptionProvider: /yolo_result topic'ine abone olundu.");
   }
 
-  bool getTrafficLightColor(std::string& color) const {
+  bool isFresh() const {
+    if (!has_data_ || !node_) return false;
+    double age = (node_->now() - last_msg_time_).seconds();
+    return age <= 1.0;
+  }
+
+  bool hasClass(const std::string& class_name, float min_conf = 0.4) const {
     std::lock_guard<std::mutex> lock(mtx_);
-    if (!has_tl_data_) return false;
-    color = last_tl_color_;
-    return true;
+    if (!isFresh()) return false;
+    auto it = class_scores_.find(class_name);
+    if (it != class_scores_.end()) {
+      return it->second >= min_conf;
+    }
+    return false;
+  }
+
+  float getConfidence(const std::string& class_name) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!isFresh()) return 0.0f;
+    auto it = class_scores_.find(class_name);
+    if (it != class_scores_.end()) {
+      return it->second;
+    }
+    return 0.0f;
+  }
+
+  std::string getHighestConfidenceSign() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!isFresh()) return "";
+    
+    std::string best_class = "";
+    float best_score = -1.0f;
+    
+    for (const auto& [c_id, score] : class_scores_) {
+      if (c_id == "kirmizi isik" || c_id == "sari isik" || c_id == "yesil") continue;
+
+      if (score > best_score) {
+        best_score = score;
+        best_class = c_id;
+      }
+    }
+    return best_class;
+  }
+
+  std::string getLightColor() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!isFresh()) return "none";
+    
+    if (class_scores_.count("kirmizi isik") && class_scores_.at("kirmizi isik") > 0.4) return "red";
+    if (class_scores_.count("sari isik") && class_scores_.at("sari isik") > 0.4) return "yellow";
+    if (class_scores_.count("yesil") && class_scores_.at("yesil") > 0.4) return "green";
+    
+    return "none";
   }
 
 private:
@@ -311,9 +366,10 @@ private:
   PerceptionProvider& operator=(const PerceptionProvider&) = delete;
 
   rclcpp::Node::SharedPtr node_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr tl_sub_;
-  std::string last_tl_color_ = "none";
-  bool has_tl_data_ = false;
+  rclcpp::Subscription<ultralytics_ros::msg::YoloResult>::SharedPtr sub_;
+  std::map<std::string, float> class_scores_;
+  rclcpp::Time last_msg_time_{0, 0, RCL_ROS_TIME};
+  bool has_data_ = false;
   mutable std::mutex mtx_;
 };
 

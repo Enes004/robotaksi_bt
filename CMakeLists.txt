@@ -22,7 +22,8 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
 find_package(nlohmann_json REQUIRED)
-
+find_package(ultralytics_ros REQUIRED)
+find_package(vision_msgs REQUIRED)
 include_directories(include)
 
 
@@ -51,6 +52,8 @@ ament_target_dependencies(segment_bt_nodes
   nav2_msgs
   tf2
   tf2_geometry_msgs
+  ultralytics_ros
+  vision_msgs
 )
 target_link_libraries(segment_bt_nodes nlohmann_json::nlohmann_json)
 
@@ -105,5 +108,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_robotaksi_bt_nodes HAS_LIBRARY_TARGET)
-ament_export_dependencies(behaviortree_cpp_v3 rclcpp rclcpp_action geometry_msgs std_msgs nav_msgs nav2_msgs tf2 tf2_geometry_msgs nlohmann_json)
+ament_export_dependencies(behaviortree_cpp_v3 rclcpp rclcpp_action geometry_msgs std_msgs nav_msgs nav2_msgs tf2 tf2_geometry_msgs nlohmann_json ultralytics_ros vision_msgs)
 ament_package()
